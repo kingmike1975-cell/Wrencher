@@ -1,16 +1,28 @@
 {
   "name": "wrencher",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
+    "deploy": "npm run build && wrangler deploy",
+    "test": "npm run build && playwright test",
     "db:init": "wrangler d1 execute wrencher_db --remote --file=schema.sql",
     "db:init:local": "wrangler d1 execute wrencher_db --local --file=schema.sql",
-    "test": "node test/harness.mjs"
+    "build": "vite build --config game/vite.config.js",
+    "dev:next": "vite --config game/vite.config.js",
+    "sprites": "node tools/extract-sprites.mjs",
+    "legacy": "node tools/make-legacy.mjs",
+    "generate": "node tools/extract-sprites.mjs && node tools/make-legacy.mjs"
   },
   "devDependencies": {
+    "@playwright/test": "1.56.1",
+    "http-server": "14.1.1",
+    "vite": "^8.3.5",
     "wrangler": "^4.0.0"
+  },
+  "dependencies": {
+    "phaser": "^4.2.1",
+    "phaser3-rex-plugins": "^1.80.20"
   }
 }
