@@ -1,16 +1,18 @@
 {
   "name": "wrencher",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
+    "test": "playwright test",
     "db:init": "wrangler d1 execute wrencher_db --remote --file=schema.sql",
-    "db:init:local": "wrangler d1 execute wrencher_db --local --file=schema.sql",
-    "test": "node test/harness.mjs"
+    "db:init:local": "wrangler d1 execute wrencher_db --local --file=schema.sql"
   },
   "devDependencies": {
+    "@playwright/test": "1.56.1",
+    "http-server": "14.1.1",
     "wrangler": "^4.0.0"
   }
 }
