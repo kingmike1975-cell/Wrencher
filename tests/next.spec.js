@@ -1,4 +1,4 @@
-// Playtest for the Phaser build at /next/: it boots, the layered Wrencher matches the original sprite,
+// Playtest for the levels rebuilt natively in Phaser, at /next/?native: it boots, the layered Wrencher matches the original sprite,
 // and the stick, ladders, double-tap run and repair zoom all behave.
 import { test, expect } from '@playwright/test';
 import { layersMatchOriginal } from '../game/src/wrencher/parts.js';
@@ -6,7 +6,7 @@ import { layersMatchOriginal } from '../game/src/wrencher/parts.js';
 async function boot(page, query = '') {
   const errors = [];
   page.on('pageerror', e => errors.push(String(e)));
-  await page.goto('/next/' + query);
+  await page.goto('/next/?native' + (query ? '&' + query.slice(1) : ''));
   await page.waitForFunction(() => window.__wrencherNext?.factory()?.P, null, { timeout: 20_000 });
   return errors;
 }
@@ -62,7 +62,7 @@ test('holding WRENCH at a worn machine repairs it and zooms in', async ({ page }
 
 test('the on-screen stick steers him', async ({ page }) => {
   await boot(page, '?touch');
-  const box = await page.locator('canvas').boundingBox();
+  const box = await page.locator('#game canvas').boundingBox();
   // the stick sits 72 game px in from the bottom-left of the 640x360 canvas
   const k = box.width / 640, sx = box.x + 72 * k, sy = box.y + box.height - 72 * k;
   const x0 = (await P(page)).x;

@@ -22,7 +22,9 @@ export class Controls {
     this.stick = { x: 0, y: 0 };   // set by the HUD's virtual joystick, -1..1
     this.touchAct = false;         // set by the HUD's WRENCH button
     this.keys = null; this.scene = null;
-    this._prevAct = false;
+    this._queued = false;      // a press that came and went between two frames still counts
+    this.startPressed = false; this.selectPressed = false;   // controller Start / Select, the frame they go down
+    this._prevAct = false; this._prevStart = false; this._prevSel = false;
   }
 
   attach(scene) {
@@ -35,14 +37,19 @@ export class Controls {
     scene.game.events.on(Phaser.Core.Events.HIDDEN, drop);
   }
 
+  // the on-screen WRENCH button calls these
+  buttonDown() { this.touchAct = true; this._queued = true; }
+  buttonUp() { this.touchAct = false; }
+
   pad() {
     const gp = this.scene.input.gamepad;
     const p = gp && gp.total ? gp.getPad(0) : null;
-    if (!p) return { x: 0, y: 0, act: false };
+    if (!p) return { x: 0, y: 0, act: false, start: false, select: false };
     let [x, y] = deadzone(p.leftStick.x, p.leftStick.y, 0.15);
     if (p.left) x = -1; if (p.right) x = 1; if (p.up) y = -1; if (p.down) y = 1;
     const act = [0, 1, 2, 3, 4, 5, 6, 7].some(i => p.buttons[i] && p.buttons[i].pressed);
-    return { x, y, act };
+    const btn = i => !!(p.buttons[i] && p.buttons[i].pressed);
+    return { x, y, act, start: btn(9), select: btn(8) };
   }
 
   // call once per frame before the game reads it
@@ -58,7 +65,14 @@ export class Controls {
     this.dx = dirOf(this.vx, this.dx, 0.12, 0.06);
     this.dy = dirOf(this.vy, this.dy, 0.35, 0.22);
     this.act = this.touchAct || pad.act || ACT_KEYS.some(down);
-    this.pressed = this.act && !this._prevAct;
+    const tapped = ACT_KEYS.some(n => Phaser.Input.Keyboard.JustDown(k[n]));
+    this.pressed = (this.act && !this._prevAct) || tapped || this._queued;
+    this._queued = false;
     this._prevAct = this.act;
+    this.startPressed = pad.start && !this._prevStart; this._prevStart = pad.start;
+    this.selectPressed = pad.select && !this._prevSel; this._prevSel = pad.select;
   }
+
+  // a controller is plugged in: the on-screen controls hide, as in the original
+  get padConnected() { const gp = this.scene && this.scene.input.gamepad; return !!(gp && gp.total); }
 }

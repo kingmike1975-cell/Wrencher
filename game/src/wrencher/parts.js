@@ -1,17 +1,18 @@
 // Wrencher as stacked layers instead of one baked picture per outfit and pose:
 //   back arm, body (no arms), front arm, hat
 // Outfits are palettes over the same layers, so a new outfit or arm pose never needs a redrawn copy of him.
-import { WREN_HD, WREN_HD_NOFRONT, WREN_HD_NOARMS_AT, WREN2_HD_LEGS, USH_TOP, WPAL, WPAL_HOT_S, TRACK_COLS, USHANKA_COLS, WREN_SHADE } from '../sprites/data.js';
+import { WREN_HD, WREN_HD_NOFRONT, WREN_NOARMS_HD, WREN2_HD, USH_TOP, WPAL, WPAL_HOT, TRACK_COLS, USHANKA_COLS, HD_LIST } from '../sprites/data.js';
 import { wrenRows, diffRows, stackRows, shadePal, rowsTexture } from '../sprites/pixels.js';
 
 const NOFRONT = wrenRows(WREN_HD, WREN_HD_NOFRONT);
-const NOARMS = wrenRows(WREN_HD, WREN_HD_NOARMS_AT);
+const NOARMS = WREN_NOARMS_HD;
+const WREN_SHADE = HD_LIST.find(([low]) => low === 'WREN')[2];
 // the original ushanka: a fur crown over his hair, flaps down the side of his head
 const withHat = rows => rows.map((r, i) => i < 5 ? USH_TOP[i] : i < 9 ? r.slice(0, 3) + 'FFf' + r.slice(6) : i === 9 ? r.slice(0, 3) + 'ff' + r.slice(5) : r);
 
 export const LAYERS = {
   body: NOARMS,
-  bodyWalk: NOARMS.slice(0, 24).concat(WREN2_HD_LEGS),
+  bodyWalk: NOARMS.slice(0, 24).concat(WREN2_HD.slice(24)),
   backArm: diffRows(NOFRONT, NOARMS),
   frontArm: diffRows(WREN_HD, NOFRONT),
   hat: diffRows(withHat(WREN_HD), WREN_HD),
@@ -30,7 +31,7 @@ export const OUTFITS = {
 };
 
 export function palette(outfit, hot) {
-  return shadePal(Object.assign({}, WPAL, OUTFITS[outfit] || {}, USHANKA_COLS, hot ? { s: WPAL_HOT_S } : {}), WREN_SHADE);
+  return shadePal(Object.assign({}, WPAL, OUTFITS[outfit] || {}, USHANKA_COLS, hot ? { s: WPAL_HOT.s } : {}), WREN_SHADE);
 }
 
 // texture key for one layer in one outfit and mood, made on first use
