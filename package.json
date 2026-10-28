@@ -1,0 +1,16 @@
+{
+  "name": "wrencher",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:init": "wrangler d1 execute wrencher_db --remote --file=schema.sql",
+    "db:init:local": "wrangler d1 execute wrencher_db --local --file=schema.sql",
+    "test": "node test/harness.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}

@@ -1,0 +1,15 @@
+name = "wrencher"
+main = "src/index.js"
+compatibility_date = "2025-06-01"
+
+# The game in ./public is served as a static asset at /.
+# Anything that isn't a file (/api/*, /admin) runs the Worker.
+assets = { directory = "./public" }
+
+[[d1_databases]]
+binding = "DB"
+database_name = "wrencher_db"
+database_id = "4ca50893-9e52-46e5-8c87-d48e403fb064"
+
+# ADMIN_TOKEN is a secret, not set here:
+#   npx wrangler secret put ADMIN_TOKEN
