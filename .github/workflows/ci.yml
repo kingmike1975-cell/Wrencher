@@ -20,6 +20,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Generated files match the original game
+        run: npm run generate && git diff --exit-code game/src
       - run: npx playwright install --with-deps chromium
       - run: npm run build
       - run: npx playwright test
