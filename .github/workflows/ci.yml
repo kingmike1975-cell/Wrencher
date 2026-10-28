@@ -20,7 +20,10 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Generated files match the original game
+        run: npm run generate && git diff --exit-code game/src
       - run: npx playwright install --with-deps chromium
+      - run: npm run build
       - run: npx playwright test
       - uses: actions/upload-artifact@v4
         if: always()
@@ -50,4 +53,4 @@ jobs:
       - if: env.CLOUDFLARE_API_TOKEN != ''
         run: npm ci
       - if: env.CLOUDFLARE_API_TOKEN != ''
-        run: npx wrangler deploy
+        run: npm run deploy
