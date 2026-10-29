@@ -169,6 +169,24 @@ const DOG = [
 const DOG2 = DOG.slice(0,5).concat(['.o..o..o..o.', '.n..n..n..n.']);
 const DOG_EATING = ['............', '............', 'n...........', '.noooooooo..', '..oooooooooo', '..o.o..o.oew', '..n.n..n.n..'];
 const DOGPAL = {o:'#7a5232', n:'#3d2817', e:'#111', w:'#111'};
+// the dog handler is a run-ender, so he and the dog can't blend in: early-80s arcade palette cycling, and both drawn
+// a head taller (1.5x, in chunky low-res pixels, nearly the lady's size). Faces and eyes stay put so they still read
+const MENACE = {scale:1.5, hz:8, lead:17, cols:[['#ff2a3a', '#a01020'], ['#ffd400', '#b08a00'], ['#2aff5a', '#109a30'], ['#2ad4ff', '#1070b0'], ['#ff3aff', '#a010a0'], ['#ffffff', '#9a9aa8']]};
+const menaceCol = (t, off, dark) => MENACE.cols[(Math.floor(t*MENACE.hz) + off) % MENACE.cols.length][dark ? 1 : 0];
+function menacePal(base, t, off){
+  const p = Object.assign({}, base);
+  if (base === DOGPAL){ p.o = menaceCol(t, off); p.n = menaceCol(t, off, true); }
+  else { p.C = menaceCol(t, off); p.D = menaceCol(t, off, true); p.k = menaceCol(t, off + 3); p.t = menaceCol(t, off + 2); }
+  return p;
+}
+// low-res rows at MENACE.scale; every source pixel lands on whole device pixels at 2x density
+function menaceSpr(rows, pal, x, y, flip){
+  const s = MENACE.scale, w = rows[0].length;
+  for (let r=0; r<rows.length; r++) for (let i=0; i<rows[r].length; i++){
+    const ch_ = rows[r][i]; if (ch_ === '.') continue;
+    b.fillStyle = pal[ch_]; b.fillRect(x + (flip ? w-1-i : i)*s, y + r*s, s, s);
+  }
+}
 const BOTTLE = ['.cc.', '.gg.', '.gg.', 'gggg', 'gwwg', 'gwwg', 'gwwg', 'gggg', 'gggg'];
 const BOTTLEPAL = {c:'#8a8f99', g:'#a8d4dc', w:'#f3e9d2'};
 const CAN = ['ssss', 'rrrr', 'rwwr', 'rrrr', 'rrrr', 'ssss'];
@@ -1999,28 +2017,28 @@ function renderWorld(t){
     }
   }
   for (const dog of dogs){
-    const x = Math.round(dog.x), y = Math.round(dog.y);
+    const x = Math.round(dog.x), y = Math.round(dog.y), M_ = MENACE.scale;
     if (dog.h){
       // let off the lead: the handler stays where he unclipped it, swinging the empty leash
       const h = dog.h, hx = Math.round(h.x), hy = FY[h.f];
-      spr(b, BUR, HANDLER_PAL, hx-5, hy-14, h.face < 0);
-      b.fillStyle = '#a0522d'; const sw = Math.sin(t*9)*2;
-      for (let i=1; i<=5; i++) b.fillRect(hx + h.face*(3 + i), hy - 7 + Math.round(i*0.5 + sw*i/5), 1, 1);
+      menaceSpr(BUR, menacePal(HANDLER_PAL, t, 0), hx - 7.5, hy - 14*M_, h.face < 0);
+      b.fillStyle = menaceCol(t, 3); const sw = Math.sin(t*9)*2;
+      for (let i=1; i<=6; i++) b.fillRect(hx + h.face*(4 + i), hy - 10 + Math.round(i*0.5 + sw*i/5), 1, 1);
     }
     if (dog.state === 'gone') continue;
     if (!dog.h){
-      const hx = x - dog.face*13;
+      const hx = x - dog.face*MENACE.lead;
       const fr = (Math.floor(dog.walkT*10) % 2) ? BUR2 : BUR;
-      spr(b, dog.state === 'chase' ? fr : BUR, HANDLER_PAL, hx-5, y-14, dog.face < 0);
-      b.fillStyle = '#a0522d';
-      const lx0 = hx + dog.face*4, lx1 = x - dog.face*4;
-      for (let i=0; i<=6; i++) b.fillRect(Math.round(lx0 + (lx1-lx0)*i/6), y-6 + Math.round(Math.sin(i/6*Math.PI)*2), 1, 1);
+      menaceSpr(dog.state === 'chase' ? fr : BUR, menacePal(HANDLER_PAL, t, 0), hx - 7.5, y - 14*M_, dog.face < 0);
+      b.fillStyle = menaceCol(t, 3);
+      const lx0 = hx + dog.face*6, lx1 = x - dog.face*6;
+      for (let i=0; i<=8; i++) b.fillRect(Math.round(lx0 + (lx1-lx0)*i/8), y-9 + Math.round(Math.sin(i/8*Math.PI)*2), 1, 1);
     }
     let dfr = DOG;
     if (dog.state === 'eat') dfr = (Math.floor(dog.walkT*5) % 2) ? DOG_EATING : DOG;
     else if (Math.floor(dog.walkT*10) % 2) dfr = DOG2;
-    if (dog.state === 'eat') spr(b, MEAT, MEATPAL, x + dog.face*6 - 3, y-4);
-    spr(b, dfr, DOGPAL, x-6, y-7, dog.face < 0);
+    if (dog.state === 'eat') spr(b, MEAT, MEATPAL, x + dog.face*9 - 3, y-4);
+    menaceSpr(dfr, menacePal(DOGPAL, t, 2), x - 9, y - 7*M_, dog.face < 0);
   }
   for (const l of ladies){
     const fr = l.state !== 'busy' && l.pauseT <= 0 && Math.floor(l.walkT*6) % 2 ? LADY2 : LADY;
@@ -4171,10 +4189,7 @@ function updateYugo(dt){
     Y.tightening = null;
     if (inp.act && s && s.state === 'loose' && Y.roll <= 0){
       Y.tightening = s; s.tight += dt/(YUGO_TIGHTEN*(Y.tongue ? 1.4 : Y.lost ? 1.2 : 1)); if (Math.random() < dt*14){ if (Y.tongue) tone(300 + Math.random()*200, .07, 'triangle', .1, 0, 900); else SFX.ratchet(); }
-      if (s.tight >= 1){ s.tight = 1; s.state = 'tight'; Y.fitted++; SFX.ding(); const p = YPARTS[s.type]; addScore(YUGO_PTS.part, p.x, p.y - 12); Y.pts += YUGO_PTS.part;
-        if (car.slots.every(q => q.state === 'tight')){ const bonus = YUGO_PTS.car + car.n*500; Y.built++; Y.pts += bonus; addScore(bonus, 213, 30); SFX.coin(); SFX.chord(0); Y.roll = 1.6; Y.swapped = false; G.alert = {text:'CAR DONE!', t:1.2};
-          // a coin for the second car on the first line, the third car after that
-          if (Y.built === yugoCoinCars()) awardCoin(213, 44, 'CAR ' + Y.built + ': +1 COIN'); } }
+      if (s.tight >= 1) yugoPartDone(s);
     }
   }
   if (P.dignity <= 0){ P.dignity = 0; P.rage = true; Y.crushT = Math.max(1.8, playRage() + 0.3); G.alert = {text:'WRENCHER HAS HAD ENOUGH', t:1.8}; return; }
@@ -4196,10 +4211,26 @@ function yugoAct(){
   const s = yugoWrenchTarget();
   if (!s) P.bubble = {text:grawlix(), t:0.5};
 }
+// a part is in tight, by wrench or by the press; the last one finishes the car
+function yugoPartDone(s, pressed){
+  const car = Y.car;
+  s.tight = 1; s.state = 'tight'; Y.fitted++; SFX.ding(); const p = YPARTS[s.type]; addScore(YUGO_PTS.part, p.x, p.y - 12); Y.pts += YUGO_PTS.part;
+  if (pressed) pop(p.x, p.y - 22, 'PRESSED IN!', '#7dff8a');
+  if (car.slots.every(q => q.state === 'tight')){ const bonus = YUGO_PTS.car + car.n*500; Y.built++; Y.pts += bonus; addScore(bonus, 213, 30); SFX.coin(); SFX.chord(0); Y.roll = 1.6; Y.swapped = false; G.alert = {text:'CAR DONE!', t:1.2};
+    // a coin for the second car on the first line, the third car after that
+    if (Y.built === yugoCoinCars()) awardCoin(213, 44, 'CAR ' + Y.built + ': +1 COIN'); }
+}
+// a loose part under the press: a coin flip to start, and every wrench turn on it (a quarter of the way down) adds 15%.
+// It either gets pressed home (counts as tight) or shaken out back to the tray
+const YUGO_SEAT = {base:0.5, perTurn:0.15, turns:4};
+const yugoTurns = s => Math.floor(s.tight*YUGO_SEAT.turns + 1e-6);
+const yugoSeatChance = s => Math.min(1, YUGO_SEAT.base + YUGO_SEAT.perTurn*yugoTurns(s));
 function yugoSlam(){
   const car = Y.car;
-  // parts left loose get shaken out of the bay and go back in the tray
-  for (const s of car.slots) if (s.state === 'loose'){ s.state = 'empty'; s.tight = 0; const q = car.tray.find(q => q.type === s.type); if (q) q.gone = false; pop(YPARTS[s.type].x, YPARTS[s.type].y - 10, 'SHOOK LOOSE', '#ff8a3c'); }
+  for (const s of car.slots) if (s.state === 'loose'){
+    if (Math.random() < yugoSeatChance(s)) yugoPartDone(s, true);
+    else { s.state = 'empty'; s.tight = 0; const q = car.tray.find(q => q.type === s.type); if (q) q.gone = false; pop(YPARTS[s.type].x, YPARTS[s.type].y - 10, 'SHOOK LOOSE', '#ff8a3c'); }
+  }
   const [wx, wy] = wrenchHand();
   const grabIn = inBay(Y.hx, Y.hy), wrenchIn = inBay(wx, wy);
   if (Y.immune > 0 && (grabIn || wrenchIn)){ pop(Y.hx, Y.hy - 16, 'DODGED!', '#7dff8a'); addScore(100); return; }
@@ -4331,14 +4362,32 @@ function drawYTongueHead(t){
 }
 function yugoLunge(dir){
   Y.lunge = {dir, t:YUGO_LUNGE.time}; Y.immune = YUGO_LUNGE.immune; Y.lungeCool = YUGO_LUNGE.cool; Y.tightening = null;
-  SFX.whoosh(); pop(Y.hx, Y.hy - 16, dir < 0 ? '< LUNGE' : 'LUNGE >', '#7fd3ff');
+  SFX.whoosh(); yugoWhoop(); pop(Y.hx, Y.hy - 16, dir < 0 ? '< LUNGE' : 'LUNGE >', '#7fd3ff');
+}
+// the dodge's "whoop": a quick rising slide, then a little fall as the arms swing up and over
+function yugoWhoop(){ tone(380, .16, 'triangle', .16, 0, 1500); tone(760, .16, 'square', .05, 0, 3000); tone(1500, .14, 'triangle', .1, .15, 900); }
+// how far the arms are lifted off the bay toward the camera while he's immune: up fast, hang there, down at the end
+function yugoLift(){
+  if (Y.immune <= 0) return 0;
+  const up = YUGO_LUNGE.immune - Y.immune;
+  return clamp(Math.min(up/0.12, Y.immune/0.3), 0, 1);
 }
 function drawYugoHands(t){
-  // afterimages from a lunge, and a flicker while he's immune
+  // afterimages from a lunge
   for (const g of Y.trail){ b.globalAlpha = g.life*3; b.fillStyle = '#7fd3ff'; b.fillRect(Math.round(g.x) - 7, Math.round(g.y) - 8, 14, 14); }
   b.globalAlpha = 1;
-  if (Y.immune > 0 && Math.floor(t*14) % 2){ b.globalAlpha = 0.55; drawYugoHands0(t); b.globalAlpha = 1; return; }
+  const k = yugoLift();
+  if (k <= 0) return drawYugoHands0(t);
+  // a dodge lifts the arms up off the engine and toward the camera: their shadows stay on the bay, the hands grow and
+  // ride up, and the press can't reach them until they come back down
+  const [wx, wy] = wrenchHand(), cx = Y.tongue ? Y.hx : (Y.hx + wx)/2, cy = Y.tongue ? Y.hy : (Y.hy + wy)/2;
+  b.fillStyle = `rgba(0,0,0,${0.35*k})`;
+  for (const [sx_, sy_] of Y.tongue ? [[Y.hx, Y.hy]] : Y.lost ? [[Y.hx, Y.hy]] : [[Y.hx, Y.hy], [wx, wy]]) b.fillRect(Math.round(sx_) - 8, Math.round(sy_) - 4, 16, 10);
+  const s = 1 + 0.55*k;
+  b.save(); b.translate(cx, cy - 18*k); b.scale(s, s); b.translate(-cx, -cy);
+  if (Math.floor(t*14) % 2) b.globalAlpha = 0.7;   // still flickers while he's immune
   drawYugoHands0(t);
+  b.restore();
 }
 function drawYugoHands0(t){
   if (Y.tongue) return drawYTongueHead(t);
@@ -4457,6 +4506,15 @@ function drawYugoOverlays(t){
     if (!(dg < 30 && Math.floor(t*6) % 2)){ ctx.fillStyle = col; ctx.fillRect(bx, by, bw*dg/100, bh); } }
   const toSlam = Y.slamAt - Y.beat;
   if (G.phase === 'yugo' && Y.roll <= 0 && toSlam <= 2 && toSlam > 0 && Math.floor(t*8) % 2){ const [x, y] = S(213, 150); shadowText('HANDS OUT!', x, y, Math.round(size*1.2), '#ff5a4f', 'center'); }
+  if (G.phase === 'yugo' && Y.roll <= 0){
+    // the odds the press seats each loose part, while it's coming down
+    if (toSlam <= 2 && toSlam > 0) for (const s of Y.car.slots) if (s.state === 'loose'){ const p = YPARTS[s.type], c = yugoSeatChance(s), [x, y] = S(p.x, p.y - p.hh - 6);
+      shadowText(`${Math.round(c*100)}%`, x, y, Math.round(size*0.8), c >= 0.8 ? '#7dff8a' : c >= 0.65 ? '#e8c547' : '#ff8a3c', 'center'); }
+    // a flashing reminder that a double tap gets him out of there, whenever the dodge is ready
+    if (Y.lungeCool <= 0 && !Y.lunge && Math.floor(t*3) % 2){ const [x, y] = S(213, 164), rs = Math.round(size*0.9), msg = 'DOUBLE-TAP LEFT OR RIGHT TO DODGE THE PRESS';
+      ctx.font = `${rs}px ${FONT}`; const tw = ctx.measureText(msg).width; ctx.fillStyle = 'rgba(11,10,16,.85)'; ctx.fillRect(x - tw/2 - 8, y - 6, tw + 16, rs + 12);
+      shadowText(msg, x, y, rs, '#7fd3ff', 'center'); }
+  }
   if (G.alert){
     const a = clamp(G.alert.t*2, 0, 1); ctx.globalAlpha = a;
     const as = Math.round(size*1.05); ctx.font = `${as}px ${FONT}`;
@@ -5044,8 +5102,15 @@ function inShopCorner(e){ return e.clientX > cw*0.72 && e.clientY > ch*0.66 && e
 // ---------- the moped post: a Spy Hunter-style ride where the words he drives over fill in his letter ----------
 // four lanes, the road rolls toward him. Every word painted on the road belongs to the letter's next blank: drive over it and it's written in.
 // Good words are small and plain. Bad words are wide, gold and worth a fortune in points, and the KGB reads every letter.
-// Ramps in the road jump him over a wall of words. Hold the action button to brake. Slow tractors share the road.
-const MOPED = {laneW:28, roadX:104, top:34, py:150, base:72, perBlank:7, row:150, airT:1.4, bad:1500, good:300, crash:8, gas:0.12, carEvery:[8, 14], carWarn:0.9, carSpeed:150, carCut:15, ladyAt:[12, 22], swap:[0.25, 0.5]};
+// Ramps in the road jump him over a wall of words. Hold the action button for turbo (Excitebike style: it heats up, and
+// an overheated engine coughs and slows him down). Slow tractors share the road.
+// Now and then a launch ramp in the right lane leads up to a high road along the verge. Only a turbo jump off it reaches
+// the high road; up there the words are mostly the safe ones, and the road merges back into the right lane at its end
+const MOPED = {turbo:{mul:1.6, heat:0.5, cool:0.3, over:1.6, overMul:0.65, need:0.6}, laneW:28, roadX:104, top:34, py:150, base:72, perBlank:7, row:150, airT:1.4, bad:1500, good:300, crash:8, gas:0.12, carEvery:[8, 14], carWarn:0.9, carSpeed:150, carCut:15, ladyAt:[12, 22], swap:[0.25, 0.5]};
+// the high road: x span on the right verge, length, gap between its launch ramp and its near end, how often it shows up
+// (seconds), how much longer a turbo jump hangs in the air, and the chance each word up there is a good one
+const UPROAD = {x0:226, w:26, len:520, gap:70, first:7, every:[10, 16], air:1.15, good:0.75, merge:34};
+const UPX = UPROAD.x0 + UPROAD.w/2;
 // jumps last a fixed time, so a faster bike (fancy gas) carries him farther past the words
 const LETTER = {
   lines:[['Dear cousin Milan, life here is ', 0, '. The factory is ', 1, '.'],
@@ -5071,7 +5136,7 @@ let M = null;
 const laneX = l => MOPED.roadX + MOPED.laneW*(l + 0.5);
 function startMoped(){
   ensureAudio(); overlay.hidden = true;
-  M = {lane:1, x:laneX(1), speed:MOPED.base, brake:0, dist:0, nextRow:60, blank:0, filled:[], bad:[], words:[], ramps:[], tractors:[], scenery:[],
+  M = {lane:1, x:laneX(1), speed:MOPED.base, boost:0, heat:0, over:0, up:null, toUp:null, segs:[], upT:UPROAD.first, dist:0, nextRow:60, blank:0, filled:[], bad:[], words:[], ramps:[], tractors:[], scenery:[],
        air:0, airMax:0, cars:[], carT:MOPED.carEvery[1], tires:upg('tires'), lady:null, ladyT:MOPED.ladyAt[0] + Math.random()*(MOPED.ladyAt[1] - MOPED.ladyAt[0]), ladyDone:false, lt:0, wob:0, hurt:0, repT:0, prevDx:0, t:0, state:'drive', ft:0, tractorT:5, pts:0, sceneryT:0, rowN:0};
   P = {x:0, y:0, dignity:G.dignity, bubble:null, sweat:0, rage:false};
   for (let y=MOPED.top; y<H; y+=22) mopedScenery(y);
@@ -5095,6 +5160,11 @@ function mopedRow(){
     const start = flip ? 4 - s - span : s;
     const boxes = G.shift >= 3 ? Array.from({length:span}, (_, i) => [start + i, 1]) : [[start, span]];
     for (const [lane, sp] of boxes) M.words.push({lane, span:sp, bad:kind === 'b', look:(kind === 'b') !== swap, text:pick(kind === 'b' ? blank.bad : blank.good), y, blank:M.blank, dead:false});
+  }
+  // the high road gets its own word in the same row, and it's usually a good one
+  if (M.segs.some(g => y > g.y0 + UPROAD.merge + 8 && y < g.y1 - 10)){
+    const bad = Math.random() >= UPROAD.good;
+    M.words.push({up:true, lane:0, span:1, bad, look:bad !== swap, text:pick(bad ? blank.bad : blank.good), y, blank:M.blank, dead:false});
   }
   if (r.ramp){
     // the wall covers the lanes it covers; a ramp sits just in front of it in one of them
@@ -5129,15 +5199,31 @@ function updateMoped(dt){
   }
   // steering: tap or hold left/right to hop a lane
   const dx = inp.dx;
-  if (dx && (dx !== m.prevDx || m.repT <= 0)){ const nl = clamp(m.lane + dx, 0, 3); if (nl !== m.lane){ m.lane = nl; tone(520 + nl*60, .05, 'square', .05); } m.repT = (dx !== m.prevDx ? 0.3 : 0.16)*(upg('lada') ? LADA_STEER : 1); }
+  if (m.up){
+    // on the high road there's one lane: steering left hops him back down onto the main road
+    if (dx < 0 && dx !== m.prevDx && m.air <= 0){ m.up = null; m.lane = 3; m.air = m.airMax = 0.45; SFX.boing(); }
+  } else if (!m.toUp && dx && (dx !== m.prevDx || m.repT <= 0)){ const nl = clamp(m.lane + dx, 0, 3); if (nl !== m.lane){ m.lane = nl; tone(520 + nl*60, .05, 'square', .05); } m.repT = (dx !== m.prevDx ? 0.3 : 0.16)*(upg('lada') ? LADA_STEER : 1); }
   m.prevDx = dx; if (m.repT > 0) m.repT -= dt;
-  m.x += (laneX(m.lane) - m.x)*Math.min(1, dt*(upg('lada') ? 5 : 14));
-  // speed: rises as the letter fills, the action button brakes
-  m.brake = inp.act && m.air <= 0 ? Math.min(1, m.brake + dt*4) : Math.max(0, m.brake - dt*3);
+  // the high road tapers back into the right lane at its far end
+  const merging = m.up && m.up.y0 + UPROAD.merge >= MOPED.py;
+  const wantX = m.toUp || (m.up && !merging) ? UPX : merging ? laneX(3) + (UPX - laneX(3))*clamp((MOPED.py - m.up.y0)/UPROAD.merge, 0, 1) : laneX(m.lane);
+  m.x += (wantX - m.x)*Math.min(1, dt*(m.toUp ? 4 : merging ? 20 : upg('lada') ? 5 : 14));
+  if (m.up && m.up.y0 >= MOPED.py){ m.up = null; m.lane = 3; tone(330, .08, 'square', .06); pop(m.x, MOPED.py - 22, 'MERGE', '#f3e9d2'); }
+  // speed: rises as the letter fills. Holding the button is turbo: it builds heat, and at full heat the engine overheats
+  // and coughs along slower for a moment (Excitebike rules)
+  const T = MOPED.turbo, boosting = inp.act && m.over <= 0;
+  if (boosting && m.boost === 0) tone(220, .25, 'sawtooth', .07, 0, 660);
+  m.boost = boosting ? Math.min(1, m.boost + dt*5) : Math.max(0, m.boost - dt*3);
+  if (m.over > 0){ m.over -= dt; m.heat = Math.max(0, m.heat - dt*T.cool); if (Math.random() < dt*8) parts.push({x:m.x + (Math.random()-.5)*6, y:MOPED.py - 4, vx:(Math.random()-.5)*12, vy:-20 - Math.random()*15, life:.8, c:Math.random() < .5 ? '#55515e' : '#8a8494', g:-5}); if (m.over <= 0) m.heat = 0.5; }
+  else if (boosting){ m.heat += dt*T.heat; if (m.heat >= 1){ m.heat = 1; m.over = T.over; m.boost = 0; SFX.thud(); noise(.4, .14, 0, 200, 1200); tone(140, .4, 'sawtooth', .08, 0, 60); pop(m.x, MOPED.py - 26, 'OVERHEAT!', '#ff5a4f'); } }
+  else m.heat = Math.max(0, m.heat - dt*T.cool);
+  if (m.boost > 0.3 && Math.random() < dt*14) tone(90 + Math.random()*30, .04, 'square', .03);
   const target = (MOPED.base + MOPED.perBlank*m.blank)*(1 + 0.08*(G.shift - 1))*(1 + MOPED.gas*upg('gas'))*(upg('lada') ? LADA_SPEED : 1);
-  m.speed = target*(1 - 0.5*m.brake);
+  m.speed = target*(1 + (T.mul - 1)*m.boost)*(m.over > 0 ? T.overMul : 1);
   const dy = m.speed*dt; m.dist += dy;
-  if (m.air > 0){ m.air -= dt; if (m.air <= 0){ m.air = 0; SFX.thud(); for (let i=0;i<6;i++) parts.push({x:m.x + (Math.random()-.5)*10, y:MOPED.py + 8, vx:(Math.random()-.5)*30, vy:Math.random()*10, life:.4, c:'#8a8070'}); } }
+  if (m.air > 0){ m.air -= dt; if (m.air <= 0){ m.air = 0; SFX.thud();
+    // a turbo jump off the launch ramp lands on the high road if it's under him, otherwise back in the right lane
+    if (m.toUp){ const g = m.toUp; m.toUp = null; if (g.y0 + UPROAD.merge < MOPED.py && g.y1 > MOPED.py){ m.up = g; pop(m.x, MOPED.py - 22, 'HIGH ROAD!', '#7dff8a'); tone(660, .08, 'square', .07); tone(990, .1, 'square', .07, .08); } else { m.lane = 3; pop(m.x, MOPED.py - 22, 'SHORT!', '#ff8a3c'); } } for (let i=0;i<6;i++) parts.push({x:m.x + (Math.random()-.5)*10, y:MOPED.py + 8, vx:(Math.random()-.5)*30, vy:Math.random()*10, life:.4, c:'#8a8070'}); } }
   if (m.wob > 0) m.wob -= dt; if (m.hurt > 0) m.hurt -= dt;
   // the world rolls toward him
   for (const o of m.scenery) o.y += dy;
@@ -5145,6 +5231,12 @@ function updateMoped(dt){
   m.sceneryT -= dy; if (m.sceneryT <= 0){ m.sceneryT = 18 + Math.random()*16; mopedScenery(MOPED.top - 30); }
   for (const w of m.words) w.y += dy;
   for (const r of m.ramps) r.y += dy;
+  for (const g of m.segs){ g.y0 += dy; g.y1 += dy; }
+  m.segs = m.segs.filter(g => g.y0 < H + 20);
+  // a launch ramp in the right lane, the high road behind it
+  if (!m.segs.length && m.state === 'drive'){ m.upT -= dt; if (m.upT <= 0){ m.upT = UPROAD.every[0] + Math.random()*(UPROAD.every[1] - UPROAD.every[0]);
+    const y1 = -20 - UPROAD.gap, seg = {y1, y0:y1 - UPROAD.len}; m.segs.push(seg); m.ramps.push({lane:3, y:-20, side:true, seg});
+    if (!m.upSeen){ m.upSeen = true; G.alert = {text:'HOLD TURBO OVER THE RED RAMP: HIGH ROAD', t:3}; } } }
   for (const k of m.tractors){ k.y += dy - k.v*dt; if (k.honk > 0) k.honk -= dt; }
   m.words = m.words.filter(w => w.y < H + 20); m.ramps = m.ramps.filter(r => r.y < H + 20); m.tractors = m.tractors.filter(k => k.y < H + 30 && k.y > -80);
   // a new row of words for the open blank every so often
@@ -5156,12 +5248,12 @@ function updateMoped(dt){
   const over = (x0, x1, y0, y1) => x1 > mx0 && x0 < mx1 && y1 > my0 && y0 < my1;
   // oncoming cars: a warning, then one comes flat out down his lane
   m.carT -= dt;
-  if (m.carT <= 0 && m.state === 'drive'){ m.carT = MOPED.carEvery[0] + Math.random()*(MOPED.carEvery[1] - MOPED.carEvery[0]); m.cars.push({x:laneX(m.lane), y:MOPED.top - 24, warn:MOPED.carWarn, lane:m.lane}); tone(440, .3, 'square', .07); tone(392, .3, 'square', .07, .32); }
+  if (m.carT <= 0 && m.state === 'drive' && !m.up && !m.toUp){ m.carT = MOPED.carEvery[0] + Math.random()*(MOPED.carEvery[1] - MOPED.carEvery[0]); m.cars.push({x:laneX(m.lane), y:MOPED.top - 24, warn:MOPED.carWarn, lane:m.lane}); tone(440, .3, 'square', .07); tone(392, .3, 'square', .07, .32); }
   for (const c of m.cars){
     if (c.warn > 0){ c.warn -= dt; c.lane = m.lane; c.x = laneX(m.lane); continue; }
     c.y += dy + MOPED.carSpeed*dt;
     if (c.y < MOPED.py - 70) c.x += clamp(laneX(m.lane) - c.x, -30*dt, 30*dt);   // it steers for him while it's far off
-    if (c.done || m.air > 0) continue;
+    if (c.done || m.air > 0 || m.up) continue;
     if (over(c.x - 7, c.x + 7, c.y - 12, c.y + 12)){
       c.done = true;
       if (m.tires > 0){ m.tires--; m.air = m.airMax = MOPED.airT; c.jumped = true; SFX.boing(); awardCoin(m.x, MOPED.py - 30, 'CAR JUMP! +1 COIN'); }
@@ -5177,25 +5269,32 @@ function updateMoped(dt){
     if (upg('teeth') && l.lane !== m.lane && l.y < MOPED.py - 30){ l.stepT = (l.stepT ?? 1.2/upg('teeth')) - dt; if (l.stepT <= 0){ l.lane += Math.sign(m.lane - l.lane); l.stepT = 1.2/upg('teeth'); } }
     l.x = l.x ? l.x + clamp(laneX(l.lane) - l.x, -90*dt, 90*dt) : laneX(l.lane);
     if (l.y > H + 30) m.lady = null;
-    else if (m.air <= 0 && over(l.x - 7, l.x + 7, l.y - 12, l.y + 12)){
+    else if (m.air <= 0 && !m.up && over(l.x - 7, l.x + 7, l.y - 12, l.y + 12)){
       const lost = ladyLoss(l); P.dignity = Math.max(0, P.dignity - lost);
-      m.state = 'lady'; m.lt = playLady(true) || Math.min(10, TEETH_HOLD[upg('teeth')]); musicStop(); m.brake = 0;
+      m.state = 'lady'; m.lt = playLady(true) || Math.min(10, TEETH_HOLD[upg('teeth')]); musicStop(); m.boost = 0;
       hearts(m.x, MOPED.py - 20, 14); pop(m.x, MOPED.py - 34, `-${lost} DIGNITY`, '#ff6b9a'); if (!voice.lady) SFX.coo();
       if (l.safe) pop(m.x, MOPED.py - 48, 'What, you no trust?', '#ff6b9a');
       l.y = MOPED.py - 4; m.x = laneX(m.lane); return;
     }
   }
   // ramps launch him over whatever is painted ahead
-  for (const r of m.ramps) if (!r.used && m.air <= 0 && over(laneX(r.lane) - 9, laneX(r.lane) + 9, r.y - 8, r.y + 8)){
-    r.used = true; m.air = m.airMax = MOPED.airT; SFX.boing(); pop(m.x, MOPED.py - 22, 'JUMP!', '#7dff8a');
+  for (const r of m.ramps) if (!r.used && m.air <= 0 && !m.up && over(laneX(r.lane) - 9, laneX(r.lane) + 9, r.y - 8, r.y + 8)){
+    r.used = true;
+    if (r.side && m.boost >= MOPED.turbo.need){ m.air = m.airMax = MOPED.airT*UPROAD.air; m.toUp = r.seg; SFX.boing(); tone(440, .3, 'square', .08, 0, 1320); pop(m.x, MOPED.py - 22, 'TURBO JUMP!', '#7dff8a'); }
+    else { m.air = m.airMax = MOPED.airT; SFX.boing(); pop(m.x, MOPED.py - 22, r.side ? 'NEED TURBO!' : 'JUMP!', r.side ? '#ff8a3c' : '#7dff8a'); }
   }
-  if (m.air <= 0){
+  if (m.air <= 0 && m.up){
+    for (const w of m.words){
+      if (w.dead || !w.up || w.blank !== m.blank) continue;
+      if (over(UPROAD.x0 + 2, UPROAD.x0 + UPROAD.w - 2, w.y - 7, w.y + 7)){ mopedWrite(w); break; }
+    }
+  } else if (m.air <= 0){
     for (const k of m.tractors) if (!k.hit && m.hurt <= 0 && over(laneX(k.lane) - 8, laneX(k.lane) + 8, k.y - 11, k.y + 11)){
       k.hit = true; k.honk = 1; m.hurt = 1.2; m.wob = 0.8; SFX.crash(); const cut = Math.round(MOPED.crash*(upg('lada') ? LADA_HIT : 1)); P.dignity = clamp(P.dignity - cut, 0, 100);
       pop(m.x, MOPED.py - 22, `TRACTOR! -${cut} DIGNITY`, '#ff5a4f'); m.lane = clamp(m.lane + (m.lane < 2 ? 1 : -1), 0, 3);
     }
     for (const w of m.words){
-      if (w.dead || w.blank !== m.blank) continue;
+      if (w.dead || w.up || w.blank !== m.blank) continue;
       const x0 = MOPED.roadX + w.lane*MOPED.laneW + 2, x1 = x0 + w.span*MOPED.laneW - 4;
       if (over(x0, x1, w.y - 7, w.y + 7)){ mopedWrite(w); break; }
     }
@@ -5234,7 +5333,8 @@ function renderMoped(t){
   const dash = Math.floor(m.dist) % 20;
   b.fillStyle = '#c8c2b0'; for (let l=1; l<4; l++) for (let y=dash - 20; y<H; y+=20) b.fillRect(R.roadX + l*R.laneW, y, 1, 10);
   for (const o of m.scenery) drawScenery(o, t);
-  for (const r of m.ramps) drawRamp(laneX(r.lane), r.y);
+  for (const g of m.segs) drawHighRoad(g, m, t);
+  for (const r of m.ramps) r.side ? drawLaunchRamp(laneX(r.lane), r.y, t) : drawRamp(laneX(r.lane), r.y);
   for (const w of m.words) drawWordPlate(w, t);
   for (const k of m.tractors) drawTractor(laneX(k.lane), k.y, t);
   for (const c of m.cars) if (c.warn <= 0) drawCar(c.x, c.y, t, c.jumped);
@@ -5262,8 +5362,35 @@ function drawRamp(x, y){
   b.fillStyle = '#b07a3e'; for (let i=0; i<4; i++) b.fillRect(x - 9, y - 6 + i*4, 18, 2);
   b.fillStyle = '#f2c641'; b.fillRect(x - 1, y - 5, 2, 8); b.fillRect(x - 3, y - 3, 6, 1); b.fillRect(x - 2, y - 4, 4, 1);
 }
+// the high road: a raised strip on the right verge with its shadow on the grass, pillars, rails, a sheer near end
+// you have to jump onto, and a slope at the far end that merges into the right lane
+function drawHighRoad(g, m, t){
+  const R = MOPED, x0 = UPROAD.x0, w = UPROAD.w, top = Math.round(g.y0 + UPROAD.merge), bot = Math.round(g.y1);
+  if (bot < -10 || g.y0 > H + 10) return;
+  b.fillStyle = 'rgba(0,0,0,0.35)'; b.fillRect(x0 + 5, top + 6, w, bot - top);           // shadow: it's up off the ground
+  b.fillStyle = '#5a5662'; for (let y = bot - 10; y > top; y -= 44) b.fillRect(x0 + 4, y, 4, 8), b.fillRect(x0 + w - 8, y, 4, 8);
+  b.fillStyle = '#1a1414'; b.fillRect(x0 - 1, top, w + 2, bot - top);
+  b.fillStyle = '#4a4a56'; b.fillRect(x0, top, w, bot - top);
+  b.fillStyle = '#c8c2b0'; b.fillRect(x0 + 1, top, 1, bot - top); b.fillRect(x0 + w - 2, top, 1, bot - top);
+  const dash = Math.floor(m.dist) % 20; b.fillStyle = '#e8c547'; for (let y = top + dash - 20; y < bot; y += 20) if (y > top) b.fillRect(x0 + w/2, y, 1, 8);
+  // the near end: a sheer drop, striped
+  for (let i=0; i<w; i+=4){ b.fillStyle = (i/4) % 2 ? '#e8c547' : '#1a1414'; b.fillRect(x0 + i, bot - 3, Math.min(4, w - i), 3); }
+  // the far end: a slope down and across into the right lane
+  const lx = R.roadX + R.laneW*3, ty = Math.round(g.y0);
+  for (let j=0; j<UPROAD.merge; j++){ const k = j/UPROAD.merge, xa = Math.round(lx + (x0 - lx)*k); b.fillStyle = '#4a4a56'; b.fillRect(xa, ty + j, x0 + w - xa, 1); b.fillStyle = '#1a1414'; b.fillRect(xa - 1, ty + j, 1, 1); }
+}
+// the launch ramp: bigger, striped, an arrow pointing up to the high road
+function drawLaunchRamp(x, y, t){
+  x = Math.round(x); y = Math.round(y);
+  b.fillStyle = '#1a1414'; b.fillRect(x - 11, y - 10, 22, 21);
+  b.fillStyle = Math.floor(t*6) % 2 ? '#c8323a' : '#e8c547'; b.fillRect(x - 10, y - 9, 20, 19);
+  b.fillStyle = '#1a1414'; for (let i=0; i<5; i++) b.fillRect(x - 10, y - 8 + i*4, 20, 1);
+  b.fillStyle = '#f3e9d2'; b.fillRect(x - 2, y - 6, 2, 10); b.fillRect(x, y - 6, 6, 2); b.fillRect(x + 4, y - 8, 2, 6); b.fillRect(x + 6, y - 7, 1, 4);
+}
+// where a word plate sits: its lane span on the road, or the high road
+const plateX = w => w.up ? [UPROAD.x0 + 2, UPROAD.w - 4] : [MOPED.roadX + w.lane*MOPED.laneW + 2, w.span*MOPED.laneW - 4];
 function drawWordPlate(w, t){
-  const x0 = MOPED.roadX + w.lane*MOPED.laneW + 2, pw = w.span*MOPED.laneW - 4, y = Math.round(w.y);
+  const [x0, pw] = plateX(w), y = Math.round(w.y);
   if (w.taken) return;
   b.save(); if (w.dead) b.globalAlpha = 0.25;
   if (w.look){
@@ -5308,7 +5435,8 @@ function drawMoped(m, t){
     r(-9, -11, 3, 6, '#1a1414'); r(6, -11, 3, 6, '#1a1414'); r(-9, 5, 3, 6, '#1a1414'); r(6, 5, 3, 6, '#1a1414');
     r(-7, -14, 14, 28, '#d8c89a'); r(-6, -13, 12, 2, '#efe2b8'); r(-6, -9, 12, 4, '#7ab0d0'); r(-6, 6, 12, 3, '#7ab0d0');
     r(-6, -5, 12, 11, '#c4b484'); r(-3, -4, 6, 4, wp.h); r(-2, -5, 4, 2, '#4a4746');
-    r(-6, 12, 3, 2, m.brake > 0.2 ? '#ff2a2a' : '#7a1418'); r(3, 12, 3, 2, m.brake > 0.2 ? '#ff2a2a' : '#7a1418');
+    r(-6, 12, 3, 2, '#7a1418'); r(3, 12, 3, 2, '#7a1418');
+    if (m.boost > 0.2){ const fl = 2 + Math.floor(Math.random()*3); r(-5, 14, 2, fl, '#ff8a3c'); r(3, 14, 2, fl, '#ff8a3c'); r(-5, 14, 2, 1, '#fff3a0'); r(3, 14, 2, 1, '#fff3a0'); }
     if (m.speed > 60 && Math.floor(t*10) % 2) r(-5, 15, 2, 2, '#6a6a6a');
     return;
   }
@@ -5318,7 +5446,8 @@ function drawMoped(m, t){
   r(-6, -6, 3, 4, wp.c); r(3, -6, 3, 4, wp.c);                        // arms
   r(-5, -3, 10, 8, wp.c); r(-4, -2, 8, 2, wp.d);                      // shoulders, coveralls
   r(-3, -5, 6, 5, wp.h); r(-2, -6, 4, 2, upg('ushanka') ? '#c8323a' : '#4a4746');   // cap from above
-  r(-1, 11, 2, 2, m.brake > 0.2 ? '#ff2a2a' : '#7a1418');             // brake light
+  r(-1, 11, 2, 2, '#7a1418');                                         // tail light
+  if (m.boost > 0.2){ const fl = 3 + Math.floor(Math.random()*4); r(-1, 13, 3, fl, '#ff8a3c'); r(0, 13, 1, fl - 1, '#fff3a0'); }   // turbo flame
   if (m.speed > 60 && Math.floor(t*10) % 2) r(1, 13, 2, 2, '#6a6a6a');  // exhaust puff
 }
 function drawLetterText(x, y, size, opts){
@@ -5346,8 +5475,8 @@ function drawMopedOverlays(t){
   drawLetterText(dx0 + 8*fit, dy0 + 7*fit, size, {filled:m.filled, current:m.state === 'drive' ? m.blank : -1, t, ink:'#2a2420', word:'#1f3a9a', blank:'#7a6a50', mark:i => m.erased && m.erased[i] ? '#b0507a' : null});
   // words painted on the road
   for (const w of m.words){
-    if (w.taken) continue;
-    const pw = (w.span*MOPED.laneW - 6)*fit, [cx, cy] = S(MOPED.roadX + (w.lane + w.span/2)*MOPED.laneW, w.y);
+    if (w.taken || w.y < MOPED.top - 6) continue;   // still up under the letter
+    const pw = (plateX(w)[1] - 2)*fit, [cx, cy] = S(w.up ? UPX : MOPED.roadX + (w.lane + w.span/2)*MOPED.laneW, w.y);
     let fs = clamp(Math.round(fit*(w.look ? 3.4 : 3)), 6, 16);
     // a long phrase in a small box goes onto two lines
     let lines = [w.text];
@@ -5371,7 +5500,15 @@ function drawMopedOverlays(t){
   shadowText(`BLANK ${Math.min(m.blank + 1, LETTER.blanks.length)}/${LETTER.blanks.length}`, dx0 + 8, dy0 + (MOPED.top + 4)*fit, small, '#e8c547');
   if (upg('tires')) shadowText(`TIRES ${m.tires}`, dx0 + 8, dy0 + (MOPED.top + 4)*fit + small*1.6, Math.round(small*0.85), m.tires ? '#7dff8a' : '#6a6680');
   if (m.state === 'lady'){ const big = clamp(Math.round(fit*6), 12, 30); shadowText('PULLED OVER', dx0 + dw/2, dy0 + dh*0.45, big, '#ff6b9a', 'center'); }
-  if (m.t < 6) shadowText(isTouch ? 'STICK: CHANGE LANE   HOLD BUTTON: BRAKE' : 'LEFT/RIGHT: CHANGE LANE   SPACE: BRAKE', dx0 + dw/2, dy0 + dh - small*4.2, Math.round(small*0.85), '#f3e9d2', 'center');
+  // the turbo heat gauge, Excitebike style
+  { const gy = dy0 + (MOPED.top + 4)*fit + small*(upg('tires') ? 3.2 : 1.6), bw = small*6, bh = Math.round(small*0.6), bx = dx0 + 8;
+    const hot = m.over > 0, col = hot ? (Math.floor(t*8) % 2 ? '#ff2a2a' : '#ffd36b') : m.heat > 0.75 ? '#ff5a4f' : m.heat > 0.45 ? '#f2c641' : '#7dff8a';
+    shadowText(hot ? 'OVERHEAT' : 'TURBO', bx, gy, Math.round(small*0.85), hot ? '#ff5a4f' : '#f3e9d2');
+    const by = gy + small*1.2; ctx.fillStyle = '#000'; ctx.fillRect(bx - 2, by - 2, bw + 4, bh + 4); ctx.fillStyle = '#2a2631'; ctx.fillRect(bx, by, bw, bh); ctx.fillStyle = col; ctx.fillRect(bx, by, bw*m.heat, bh); }
+  // a flashing TURBO! over a launch ramp coming up
+  for (const r of m.ramps) if (r.side && !r.used && r.y > MOPED.top && Math.floor(t*6) % 2){ const [x, y] = S(laneX(r.lane), r.y - 16); shadowText('TURBO!', x, y, small, '#ffd36b', 'center'); }
+  if (m.up && Math.floor(t*3) % 2){ const [x, y] = S(UPX, MOPED.py + 18); shadowText('LEFT: DROP DOWN', x, y, Math.round(small*0.7), '#f3e9d2', 'center'); }
+  if (m.t < 6) shadowText(isTouch ? 'STICK: CHANGE LANE   HOLD BUTTON: TURBO' : 'LEFT/RIGHT: CHANGE LANE   SPACE: TURBO', dx0 + dw/2, dy0 + dh - small*4.2, Math.round(small*0.85), '#f3e9d2', 'center');
   if (G.alert && m.state === 'drive') shadowText(G.alert.text, dx0 + dw/2, dy0 + dh*0.42, Math.round(small*1.1), '#ffd36b', 'center');
   if (m.state === 'freeze'){
     const big = clamp(Math.round(fit*9), 18, 48);
