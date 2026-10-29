@@ -52,5 +52,11 @@ jobs:
         run: echo "::notice::CLOUDFLARE_API_TOKEN is not set, so nothing was deployed. See docs/DEPLOY.md."
       - if: env.CLOUDFLARE_API_TOKEN != ''
         run: npm ci
+      - name: Stamp the build on the title card
+        if: env.CLOUDFLARE_API_TOKEN != ''
+        run: |
+          stamp="$(TZ=America/Los_Angeles date +'%b %-d %-I:%M%p') ${GITHUB_SHA::7}"
+          sed -i "s/^const BUILD = 'dev';/const BUILD = '$stamp';/" public/index.html game/src/legacy/game.js
+          grep -q "const BUILD = '$stamp';" public/index.html
       - if: env.CLOUDFLARE_API_TOKEN != ''
         run: npm run deploy

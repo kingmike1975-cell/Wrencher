@@ -2330,6 +2330,8 @@ function card(html, low){
   overlay.hidden = false; G.cardT = G.t;
   const btn = overlay.querySelector('button'); if (btn) btn.focus({preventScroll:true});
 }
+// which build this is: the deploy job swaps in the date and commit, so a stale page on the phone is easy to spot
+const BUILD = 'dev';
 function showTitle(){
   card(`<h1>WRENCHER</h1>
     <p>Keep six machines running through a 60-second shift. Points: 100 a wrench turn, 500 per bureaucrat you scare off, 1000 per machine still running at the whistle. More running than broken restores your dignity.</p>
@@ -2346,6 +2348,7 @@ function showTitle(){
     </ul>
     <div class="row"><button class="go" id="go" type="button">CLOCK IN</button>
     <p class="fine">${isTouch ? 'Play in landscape.' : 'Keys: arrows or WASD, Space to wrench, M to mute.'} Gamepads work too: stick or d-pad, any face button to wrench.</p></div>
+    <p class="fine">Build ${BUILD}.</p>
     <p class="fine">Prototype. Music is a chiptune take on your theme, and the bureaucrats speak your recorded lines.</p>`);
   overlay.querySelector('#go').onclick = () => { G.shift = 1; G.score = 0; startShift(); };
 }
@@ -7575,8 +7578,12 @@ function frame(now){
   for (let i = 0; i < steps; i++){ stepPhase(dt/steps); if (i < steps - 1) inp.pressed = false; }
   updateCamera(dt);
   render(G.t);
+  syncActLabel();
   inp.pressed = false;
 }
+// the action button says what it does: TURBO on the moped post, WRENCH everywhere else
+function actLabel(){ return G.phase === 'moped' ? 'TURBO' : 'WRENCH'; }
+function syncActLabel(){ const b = document.getElementById('act'), l = actLabel(); if (b && b.textContent !== l){ b.textContent = l; b.setAttribute('aria-label', l === 'TURBO' ? 'Turbo' : 'Wrench action'); } }
 function stepPhase(dt){
   // any card with a GO button (round done, title, ...): the wrench button or space presses it too, after a beat so a
   // swing still being mashed from the fight doesn't skip it. The gulag keeps its own longer delay below
@@ -7615,7 +7622,7 @@ function stepPhase(dt){
   else if (G.phase === 'dentEnd') updateDentEnd(dt);
 }
 // read-only handle for the automated playtests in tests/ (they start levels and watch G)
-window.__wrencher = {get P(){ return P; }, G, levels:TEST_LEVELS, previewShop, previewEnding, shop:() => SHOP, upgrades:UPGRADES, shopBuy, newGame, hubEnter, hubLevels};
+window.__wrencher = {get P(){ return P; }, G, actLabel, moped:() => M, levels:TEST_LEVELS, previewShop, previewEnding, shop:() => SHOP, upgrades:UPGRADES, shopBuy, newGame, hubEnter, hubLevels};
 if (document.fonts && document.fonts.load) document.fonts.load(`10px ${FONT}`).catch(() => {});
 return {
   frame, G, cam, inp,

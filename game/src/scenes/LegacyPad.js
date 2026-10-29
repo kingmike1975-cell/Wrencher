@@ -1,4 +1,4 @@
-// The on-screen stick and WRENCH button for the original game, sized and placed like the original's
+// The on-screen stick and action button (WRENCH, or TURBO on the moped post) for the original game, sized and placed like the original's
 // (128px stick bottom-left, 104px button bottom-right, clear of the iPhone's rounded corners and home bar).
 // Touch screens only, and hidden while a controller is plugged in.
 import Phaser from 'phaser';
@@ -65,6 +65,9 @@ export class LegacyPad extends Phaser.Scene {
     if (!this.touch) return;
     const show = !this.controls.padConnected;
     for (const o of [this.base, this.knob, this.btn, this.label]) o.setVisible(show);
+    // the original game names the button for the level (TURBO on the moped post)
+    const l = window.__wrencher?.actLabel?.() || 'WRENCH';
+    if (this.label.text !== l) this.label.setText(l);
     this.stick.setEnable(show);
   }
 }
