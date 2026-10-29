@@ -3021,7 +3021,7 @@ function toGulag(reason){
   if (G.score >= RETIRE_PTS) return toRetire();
   G.phase = 'gulag'; G.gulagT = 0; G.gulagSong = false; lastGulagCurse = -1; musicStop(); SFX.sting();
   if (G.score > bestScore){ bestScore = G.score; try { localStorage.setItem('wrencher.bestScore', bestScore); } catch(e) {} }
-  const done = G.shift - 1;
+  const done = (G.realShift || G.shift) - 1;
   const why = reason === 'queue' ? 'You lost your temper in the bread line. The comrades will talk about it for years.' : reason === 'space' ? 'Lost in orbit. The Americans zapped away your dignity.' : reason === 'dentist' ? 'Bitten once too often. The patients chewed through your dignity.' : reason === 'dog' ? `${G.caughtBy || 'Bruno'} caught you with no meat.` : reason === 'rage' ? 'You lost your temper with a bureaucrat. Dignity ran out.' : reason === 'crush' ? 'The press took your hands. Dignity ran out.' : reason === 'letter' ? 'The KGB read your letter. Ten years for anti-state slander.' : reason === 'brawl' ? ({wrench:'Clobbered by a giant wrench swinging a little copy of you.', bear:'Mauled by a dancing bear. The circus has filed a complaint.', wife:'Flattened by your own wife. She says you had it coming.'}[bossKind()] || `Beaten in a brawl with the ${RANKS[topRank()].name.toLowerCase()}.`) : `Only ${G.lastRunning} of ${machines.length} machines running. The shame was too much.`;
   card(`<h1>GULAG</h1>
     <p>${why} Shifts completed: ${done}. Score: ${G.score.toLocaleString()}. Best score: ${bestScore.toLocaleString()}.</p>
@@ -4681,7 +4681,7 @@ const UPGRADES = [
   {id:'tires', name:'EXCELLENT TIRES', max:3, cost:[1, 5, 10], desc:'Moped post: an oncoming car becomes a ramp, once per rank per ride. Each car jump pays a coin.'},
   {id:'gas', name:'FANCY GAS', max:3, cost:[1, 3, 5], desc:'Moped post: the bike runs 12% faster per rank, so jumps carry farther.'},
   {id:'teeth', name:'GOLD TEETH', max:5, cost:[1, 2, 3, 4, 5], desc:'One more gold tooth per rank. The lady comes for you faster. From 3 teeth: he flashes a gold grin now and then, the first lady in each level pays you a coin, and it costs less dignity and is over quicker (5 s, then 2 s, then 1 s).'},
-  {id:'potabage', name:'POTABAGE', max:2, cost:[5, 10], desc:'Part potato, part cabbage, all level skip. Every new game starts one round further on per rank.'},
+  {id:'potabage', name:'POTABAGE', max:2, cost:[5, 5], desc:'Part potato, part cabbage, all level skip. Every new game starts one round further on per rank.'},
   {id:'ushanka', name:'FUR USHANKA', max:1, cost:[4], desc:'Fur hat with ear flaps. The first spit or pee that hits you in each level just runs off it.'},
   {id:'card', name:'PARTY CARD', max:1, cost:[5], desc:'He flashes it at the first bureaucrat who gets close in each level: a salute, and off he goes.'},
   {id:'lada', name:'LADA KEYS', max:1, cost:[6], desc:'The moped post in a Lada: 25% faster, and tractors and head-ons cost half the dignity, but it is much slower to change lanes.'},
@@ -4691,14 +4691,17 @@ const UPGRADES = [
   {id:'laika', name:'LAIKA', max:1, cost:[5], desc:'A little space dog orbits you in the Cosmodrome and takes one laser for you.'},
   {id:'ration', name:'RATION BOOK', max:1, cost:[3], desc:'Stamped and official: cut ahead one place in the bread line.'},
   {id:'tito', name:'PORTRAIT OF TITO', max:1, cost:[15], desc:'Comrade Tito watches over you: +1 coin every time you finish a level.'},
+  {id:'rats', name:'RAT HEADPHONES', max:1, cost:[15], desc:'Two rats, one over each ear. "You can hear the far out music of another land." Switch them on and the crossroads opens the other four job assignments. Pick them again to switch.'},
   {id:'papers', name:'PAPERS FOR AMERICA', max:1, cost:[50], desc:'Forged exit papers. Buy them and he defects: the run ends in America. Coins and upgrades stay.'}];
 let SHOP = {coins:0, upg:{}};
-try { const s = JSON.parse(localStorage.getItem('wrencher.shop') || 'null'); if (s && typeof s.coins === 'number') SHOP = {coins:s.coins, upg:s.upg || {}}; } catch(e) {}
+try { const s = JSON.parse(localStorage.getItem('wrencher.shop') || 'null'); if (s && typeof s.coins === 'number') SHOP = {coins:s.coins, upg:s.upg || {}, rats:!!s.rats}; } catch(e) {}
 function saveShop(){ if (G.shopPreview || G.maxUp) return; try { localStorage.setItem('wrencher.shop', JSON.stringify(SHOP)); } catch(e) {} }
 const upg = id => SHOP.upg[id] || 0;
 const walkMul = () => 1 + 0.04*upg('track'), runMul = () => 1 + 0.10*upg('kedi');
 // levels with no sprint (the dentist's hand, the Yugo arm, the jetpack, ladders and stairs, the crossroads): tracksuit and sneakers both count
 const moveMul = () => walkMul() + 0.05*upg('kedi');
+// the rat headphones: while they're on, the crossroads shows the other set of four (rounds 1-3 get the second set, round 4 on gets the first)
+const ratsOn = () => upg('rats') > 0 && !!SHOP.rats;
 const upgCost = u => u.cost[Math.min(upg(u.id), u.cost.length - 1)];
 const chromeMul = () => 1 + 0.25*upg('chrome');
 const RAKIJA_T = 5, LADA_STEER = 2.2, LADA_HIT = 0.5, LADA_SPEED = 1.25;
@@ -4852,16 +4855,27 @@ function shopSay(text){ KS.line = text; KS.lineT = 3; KS.talk = 1.2; SFX.babble(
 function shopBuy(i){
   if (i === UPGRADES.length){ return leaveShop(); }
   const u = UPGRADES[i], lv = upg(u.id);
+  if (u.id === 'rats' && lv){ SHOP.rats = !SHOP.rats; saveShop(); SFX.chord(SHOP.rats ? 2 : 0); return shopSay(SHOP.rats ? 'Rats on. Far out, comrade.' : 'Rats off. Back to the usual music.'); }
   if (lv >= u.max) return shopSay(u.stock ? 'Three is enough, you animal.' : 'You have all of it already.');
   const c = upgCost(u);
   if (SHOP.coins < c){ tone(140, .18, 'square', .12, 0, 90); return shopSay(pick(['No money, no ' + u.name.toLowerCase() + '.', 'You are short, comrade.', 'Come back with coins.'])); }
   SHOP.coins -= c; SHOP.upg[u.id] = lv + 1; saveShop();
   if (u.id === 'papers'){ KS = null; return toAmerica(); }
+  if (u.id === 'rats'){ SHOP.rats = true; saveShop(); ratsCard(); }
   const skip = u.id === 'potabage' && !G.shopPreview && G.shift === G.runStart && !Object.keys(G.cleared).length;
   if (skip){ G.shift++; G.runStart = G.shift; }
   SFX.coin(); SFX.chord(0);
   const [x, y] = shopSlot(i); for (let k=0;k<12;k++) parts.push({x:x + 14, y:y + 18, vx:(Math.random()-.5)*60, vy:-Math.random()*50, life:.6, c:pick(['#ffd36b', '#c8323a', '#f3e9d2']), g:90});
-  shopSay(u.id === 'rubber' ? 'Ha! Big plans tonight, eh?' : u.id === 'potabage' ? (skip ? 'Eat. You wake up in round ' + G.shift + '.' : 'Keep it. Next game you start further on.') : pick(['Excellent choice!', 'Very good. Tell nobody.', 'Pleasure doing business.']));
+  shopSay(u.id === 'rats' ? 'Worth every penny.' : u.id === 'rubber' ? 'Ha! Big plans tonight, eh?' : u.id === 'potabage' ? (skip ? 'Eat. You wake up in round ' + G.shift + '.' : 'Keep it. Next game you start further on.') : pick(['Excellent choice!', 'Very good. Tell nobody.', 'Pleasure doing business.']));
+}
+// the instruction page that comes with the rats
+function ratsCard(){
+  card(`<h1>RAT HEADPHONES</h1>
+    <p>"You can hear the far out music of another land."</p>
+    <p>With the rats ON, the crossroads sends you to the other four job assignments. In rounds 1 to 3 that's the next four: the nuclear plant, the dentist, the cosmodrome and the queue. From round 4 on it's your past four: the farm, the factory, the Yugo line and the moped post.</p>
+    <p class="fine">Clear the four on the crossroads and the boss still comes. Switch the rats ON or OFF here at the kiosk any time: pick them and buy again.</p>
+    <div class="row"><button class="go" id="go" type="button">PUT THEM ON</button></div>`);
+  overlay.querySelector('#go').onclick = () => { overlay.hidden = true; if (KS) KS.t = 0; };
 }
 function leaveShop(){
   KS = null; SFX.whoosh();
@@ -4876,6 +4890,8 @@ function shopScroll(){ const r = Math.floor(KS.sel/SHOP_COLS); if (r < KS.row0) 
 function updateShop(dt){
   const k = KS; k.t += dt; updateParts(dt);
   if (k.lineT > 0) k.lineT -= dt; if (k.talk > 0) k.talk -= dt;
+  // the rats' instruction page is up: the shelf waits
+  if (!overlay.hidden){ G.shopTap = undefined; k.prevDx = inp.dx; k.prevDy = inp.dy; return; }
   const n = UPGRADES.length + 1;
   if (inp.dx && inp.dx !== k.prevDx){ k.sel = (k.sel + inp.dx + n) % n; tone(700, .04, 'square', .05); }
   if (inp.dy && inp.dy !== k.prevDy){ const s = k.sel + inp.dy*SHOP_COLS; if (s >= 0 && s < n) k.sel = s; else if (inp.dy > 0) k.sel = n - 1; tone(700, .04, 'square', .05); }
@@ -4944,6 +4960,14 @@ function shopIcon(id, x, y, t){
   else if (id === 'lead'){ r(-9, -10, 18, 20, '#5a6068'); r(-13, -9, 4, 13, '#5a6068'); r(9, -9, 4, 13, '#5a6068'); r(-1, -10, 2, 20, '#3a3e44'); r(-6, -4, 5, 5, '#e8f03a'); r(-5, -3, 3, 3, '#1a1414'); r(-4, -2, 1, 1, '#e8f03a'); r(-9, 7, 18, 2, '#7a8088'); }
   else if (id === 'laika'){ b.save(); b.translate(x, y); b.scale(2, 2); drawLaika(-1, 1, false, t); b.restore(); }
   else if (id === 'ration'){ r(-8, -11, 16, 21, '#c9b48a'); r(-7, -10, 14, 19, '#e8dcc0'); for (let i=0; i<4; i++) for (let j=0; j<3; j++) r(-6 + j*4, -8 + i*4, 3, 3, (i + j) % 3 ? '#c8b89a' : '#a05050'); r(1, 4, 6, 5, 'rgba(200,50,58,0.75)'); }
+  else if (id === 'rats'){
+    // two grey rats, one per ear, tails curled up over the top as the band
+    r(-8, -14, 16, 2, '#c88a94'); r(-10, -12, 2, 4, '#c88a94'); r(8, -12, 2, 4, '#c88a94');
+    for (const sx of [-1, 1]){ const ox = sx < 0 ? -13 : 5;
+      r(ox, -8, 8, 12, '#8a8a92'); r(ox + 1, -9, 6, 1, '#8a8a92'); r(ox + 1, 4, 6, 2, '#6a6a72');
+      r(ox + (sx < 0 ? 0 : 6), -11, 2, 3, '#e8a0b0'); r(ox + (sx < 0 ? 5 : 1), -5, 2, 2, '#1a1414'); r(ox + (sx < 0 ? 7 : -1), 0, 1, 1, '#e8a0b0'); }
+    if (Math.floor(t*2) % 2){ r(-2, -4, 1, 3, '#9ab8ff'); r(-1, -5, 2, 1, '#9ab8ff'); r(1, -2, 1, 3, '#ff6b9a'); r(2, -3, 2, 1, '#ff6b9a'); }
+  }
   else if (id === 'tito'){ r(-9, -12, 18, 23, '#8a6a3e'); r(-7, -10, 14, 19, '#d8cca8'); r(-4, -8, 8, 4, '#6a6a6a'); r(-4, -5, 8, 6, '#d8a888'); r(-2, -3, 1, 1, '#1a1414'); r(1, -3, 1, 1, '#1a1414'); r(-5, 1, 10, 7, '#5a6a8a'); r(-1, 1, 2, 5, '#f3efe4'); r(-1, 3, 2, 3, '#c8323a'); }
   else if (id === 'rubber'){ r(-8, -8, 16, 16, '#c8b8a0'); r(-7, -7, 14, 14, '#e8dcc0'); r(-4, -4, 8, 8, '#e8a0b0'); r(-3, -3, 6, 6, '#f0c0cc'); r(-1, -1, 2, 2, '#e8a0b0'); r(-7, -7, 3, 1, '#c8323a'); }
 }
@@ -4958,14 +4982,14 @@ function drawShopText(t){
     const [x, y] = shopSlot(i), [sx, sy] = S(x + 14, y + 36);
     if (i === UPGRADES.length){ shadowText('DONE', sx, S(0, y + 32)[1], small, '#f3e9d2', 'center'); continue; }
     const u = UPGRADES[i], lv = upg(u.id), full = lv >= u.max;
-    const label = full ? (u.stock ? 'FULL' : 'MAX') : `${upgCost(u)} C`;
-    shadowText(label, sx, sy, Math.round(small*0.75), full ? '#7dff8a' : SHOP.coins >= upgCost(u) ? '#ffd36b' : '#a05050', 'center');
+    const label = full ? (u.id === 'rats' ? (SHOP.rats ? 'ON' : 'OFF') : u.stock ? 'FULL' : 'MAX') : `${upgCost(u)} C`;
+    shadowText(label, sx, sy, Math.round(small*0.75), full ? (u.id === 'rats' && !SHOP.rats ? '#a59eb2' : '#7dff8a') : SHOP.coins >= upgCost(u) ? '#ffd36b' : '#a05050', 'center');
   }
   // the selected item, spelled out
   const [lx, ly] = S(110, 130);
   if (k.sel < UPGRADES.length){
     const u = UPGRADES[k.sel], lv = upg(u.id);
-    shadowText(`${u.name}  ${u.stock ? `CARRYING ${lv}/${u.max}` : `RANK ${lv}/${u.max}`}`, lx, ly, small, '#f3e9d2');
+    shadowText(`${u.name}  ${u.id === 'rats' && lv ? (SHOP.rats ? 'ON' : 'OFF') : u.stock ? `CARRYING ${lv}/${u.max}` : `RANK ${lv}/${u.max}`}`, lx, ly, small, '#f3e9d2');
     ctx.font = `${Math.round(small*0.85)}px ${FONT}`;
     wrap(u.desc, 200*fit).forEach((l, i) => shadowText(l, lx, ly + small*1.6 + i*small*1.3, Math.round(small*0.85), '#a59eb2'));
   } else shadowText(G.shopPreview ? 'LEAVE THE KIOSK' : 'CLOCK IN AT THE CROSSROADS', lx, ly, small, '#f3e9d2');
@@ -6842,11 +6866,15 @@ const HUB_EXITS2 = {
   S:{key:typeof startDentist === 'function' ? 'dentist' : null, soon:'dentist', name:'THE DENTIST', col:'#f3e9d2'},
   W:{key:typeof startSpace === 'function' ? 'space' : null, soon:'cosmo', name:'COSMODROME', col:'#9ab8ff'},
   E:{key:typeof startQueue === 'function' ? 'queue' : null, soon:'queue', name:'THE QUEUE', col:'#e8a05a'}};
-const hubExits = () => G.shift >= NEW_SET_FROM ? HUB_EXITS2 : HUB_EXITS;
-const hubLevels = () => G.shift >= NEW_SET_FROM ? Object.values(HUB_EXITS2).map(e => e.key).filter(Boolean) : HUB_LEVELS;
+// the round a crossroads level plays at: with the rats on, the other set's matching round (1 -> 4, 4 -> 1, capped at 3)
+const playShift = () => !ratsOn() ? G.shift : G.shift < NEW_SET_FROM ? G.shift + NEW_SET_FROM - 1 : clamp(G.shift - NEW_SET_FROM + 1, 1, NEW_SET_FROM - 1);
+const hubFarm = () => FARM_THEMES[clamp(playShift() - 1, 0, FARM_THEMES.length - 1)];
+const newSetShown = () => (G.shift >= NEW_SET_FROM) !== ratsOn();
+const hubExits = () => newSetShown() ? HUB_EXITS2 : HUB_EXITS;
+const hubLevels = () => newSetShown() ? Object.values(HUB_EXITS2).map(e => e.key).filter(Boolean) : HUB_LEVELS;
 let HB = null;
 function newGame(){
-  G.nuke = false;
+  G.nuke = false; G.realShift = 0;
   G.shift = 1 + upg('potabage'); G.runStart = G.shift; G.score = 0; G.dignity = 100; G.cleared = {}; G.introDone = {}; G.shopDue = true;
   G.farmPreview = G.factoryPreview = G.yugoPreview = G.mopedPreview = G.preview = G.bossPreview = false; G.bossPreviewKind = null;
   toHub();
@@ -6854,6 +6882,8 @@ function newGame(){
 function toHub(){
   ensureAudio(); overlay.hidden = true; parts = []; pops = []; G.alert = null;
   cam.z = 1; cam.cx = W/2; cam.cy = H/2;
+  // back from a level the rats took him to: the real round again
+  if (G.realShift){ G.shift = G.realShift; G.realShift = 0; }
   // every round opens at the kiosk
   if (G.shopDue){ G.shopDue = false; return toShop(); }
   G.cleared = G.cleared || {};
@@ -6893,6 +6923,8 @@ function updateHub(dt){
 }
 function hubEnter(dir){
   const key = hubExits()[dir].key; HB = null; G.nuke = key === 'nuke';
+  // the rats' other set plays at its own matching round: round 1 is the second set's first, round 4 is the first set's first
+  if (ratsOn()){ G.realShift = G.shift; G.shift = playShift(); }
   // the labour medal tops up his dignity at the door of every level
   if (upg('medal')) G.dignity = Math.min(100, G.dignity + 10*upg('medal'));
   if (key === 'farm') startFarm();
@@ -6935,15 +6967,23 @@ function renderHub(t){
   if (h && !h.boss){
     const fr = h.walkT > 0 && Math.floor(h.walkT*8) % 2 ? WREN2 : WREN;
     const sh = h.enter ? 1 - Math.min(1, h.enter.t/0.6) : 1;
-    b.save(); b.globalAlpha = sh; spr(b, fr, WPAL, Math.round(h.x) - 10, Math.round(h.y) - 26, h.face < 0, 2); b.restore();
+    b.save(); b.globalAlpha = sh; spr(b, fr, WPAL, Math.round(h.x) - 10, Math.round(h.y) - 26, h.face < 0, 2); if (ratsOn()) drawRatPhones(Math.round(h.x), Math.round(h.y) - 26, t); b.restore();
     if (h.enter){ b.fillStyle = `rgba(63,240,255,${Math.min(1, h.enter.t/0.6)*0.6})`; b.fillRect(0, 0, W, H); }
   }
   drawParts();
 }
+// the rat headphones on his head in the crossroads, with the far out music coming off them
+function drawRatPhones(x, top, t){
+  const r = (dx, dy, w, h, c) => { b.fillStyle = c; b.fillRect(x + dx, top + dy, w, h); };
+  r(-5, -2, 10, 1, '#c88a94'); r(-6, -1, 1, 2, '#c88a94'); r(5, -1, 1, 2, '#c88a94');
+  for (const ox of [-8, 5]){ r(ox, 1, 3, 5, '#8a8a92'); r(ox + (ox < 0 ? 0 : 2), 0, 1, 1, '#e8a0b0'); r(ox + 1, 3, 1, 1, '#1a1414'); }
+  const k = (t*1.5) % 1; b.globalAlpha *= 1 - k;
+  r(-11 - Math.round(k*4), -4 - Math.round(k*6), 1, 2, '#9ab8ff'); r(10 + Math.round(k*4), -6 - Math.round(k*6), 1, 2, '#ff6b9a');
+}
 function hubEmblem(dir, x, y, t, done){
   if (hubExits() === HUB_EXITS2) return drawNewEmblem(HUB_EXITS2[dir], x, y, t, done);
   b.globalAlpha = done ? 0.35 : 1;
-  if (dir === 'N'){ const cr = farmTheme().crops[0]; b.fillStyle = CROPS[cr].col; b.fillRect(x - 5, y - 3, 10, 8); b.fillStyle = '#2f6a26'; b.fillRect(x - 1, y - 7, 2, 4); }
+  if (dir === 'N'){ const cr = hubFarm().crops[0]; b.fillStyle = CROPS[cr].col; b.fillRect(x - 5, y - 3, 10, 8); b.fillStyle = '#2f6a26'; b.fillRect(x - 1, y - 7, 2, 4); }
   else if (dir === 'S'){ b.fillStyle = '#6a7180'; b.fillRect(x - 7, y - 5, 14, 10); b.fillStyle = Math.floor(t*3) % 2 ? '#ff4b4b' : '#7dff8a'; b.fillRect(x + 2, y - 3, 3, 3); b.fillStyle = '#2c2f35'; b.fillRect(x - 5, y - 2, 5, 5); }
   else if (dir === 'W'){ b.fillStyle = '#c8323a'; b.fillRect(x - 8, y - 1, 16, 5); b.fillRect(x - 4, y - 5, 9, 4); b.fillStyle = '#7fb6d6'; b.fillRect(x - 3, y - 4, 3, 2); b.fillRect(x + 1, y - 4, 3, 2); b.fillStyle = '#1a1414'; b.fillRect(x - 6, y + 4, 3, 2); b.fillRect(x + 3, y + 4, 3, 2); }
   else if (dir === 'E'){ b.fillStyle = '#1a1414'; b.fillRect(x - 8, y + 1, 5, 5); b.fillRect(x + 4, y + 1, 5, 5); b.fillStyle = '#3f72d6'; b.fillRect(x - 5, y - 2, 11, 4); b.fillRect(x - 1, y - 6, 5, 4); b.fillStyle = '#8a8a8a'; b.fillRect(x + 4, y - 7, 4, 1); b.fillStyle = '#efe6cf'; b.fillRect(x - 7, y - 7, 6, 4); }
@@ -6962,7 +7002,7 @@ function drawHubText(t){
   // gate labels
   for (const [dir, [ex, ey]] of Object.entries(HUB.ends)){
     const e = hubExits()[dir], done = e.key && G.cleared[e.key];
-    const name = e.key === 'farm' ? farmTheme().name : e.name, [x, y] = dir === 'S' ? S(ex + 17, ey - 4) : S(ex, dir === 'N' ? ey - 22 : ey + 16);
+    const name = e.key === 'farm' ? hubFarm().name : e.name, [x, y] = dir === 'S' ? S(ex + 17, ey - 4) : S(ex, dir === 'N' ? ey - 22 : ey + 16);
     shadowText(done ? `${name}: DONE` : name, x, y, small, done ? '#4a5a66' : e.key ? e.col : '#5a6670', dir === 'S' ? 'left' : 'center');
   }
   if (h.boss){
@@ -6970,6 +7010,7 @@ function drawHubText(t){
     if (Math.floor(t*4) % 2) shadowText(`${BOSS_KINDS[bossKind()] ? BOSS_KINDS[bossKind()].title : 'THE BUREAUCRAT'} AWAITS`, dx0 + dw/2, dy0 + dh*0.13, big, '#ff4b4b', 'center');
   } else {
     const left = hubLevels().filter(k => !G.cleared[k]).length;
+    if (ratsOn()) shadowText(newSetShown() ? 'RAT HEADPHONES ON: THE NEXT FOUR' : 'RAT HEADPHONES ON: YOUR PAST FOUR', dx0 + dw/2, dy0 + 10 + size*1.3, Math.round(small*0.85), '#e8a0b0', 'center');
     shadowText(left === hubLevels().length ? 'CHOOSE YOUR YUGOSLAV EXPERIENCE' : `${left} LEFT, THEN ${BOSS_KINDS[bossKind()] ? BOSS_KINDS[bossKind()].title : 'THE BUREAUCRAT'}`, dx0 + dw/2, dy0 + 6, size, '#f3e9d2', 'center');
   }
   for (const p of pops){ const [x, y] = S(p.x, p.y - (1.2 - p.t)*12); ctx.globalAlpha = clamp(p.t*1.5, 0, 1); shadowText(p.text, x, y, small, p.color, 'center'); ctx.globalAlpha = 1; }
@@ -7437,7 +7478,7 @@ function stepPhase(dt){
   else if (G.phase === 'dentEnd') updateDentEnd(dt);
 }
 // read-only handle for the automated playtests in tests/ (they start levels and watch G)
-window.__wrencher = {get P(){ return P; }, G, levels:TEST_LEVELS, previewShop, previewEnding};
+window.__wrencher = {get P(){ return P; }, G, levels:TEST_LEVELS, previewShop, previewEnding, shop:() => SHOP, upgrades:UPGRADES, shopBuy, newGame, hubEnter, hubLevels};
 if (document.fonts && document.fonts.load) document.fonts.load(`10px ${FONT}`).catch(() => {});
 return {
   frame, G, cam, inp,
