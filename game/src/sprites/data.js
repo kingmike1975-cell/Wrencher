@@ -70,6 +70,7 @@ export const DOG = ["........nn..",".......oooo.","n.....ooeoow",".noooooooo..",
 export const DOG2 = ["........nn..",".......oooo.","n.....ooeoow",".noooooooo..","..oooooooo..",".o..o..o..o.",".n..n..n..n."];
 export const DOG_EATING = ["............","............","n...........",".noooooooo..","..oooooooooo","..o.o..o.oew","..n.n..n.n.."];
 export const DOGPAL = {"o":"#7a5232","n":"#3d2817","e":"#111","w":"#111"};
+export const MENACE = {"scale":1.5,"hz":8,"lead":17,"cols":[["#ff2a3a","#a01020"],["#ffd400","#b08a00"],["#2aff5a","#109a30"],["#2ad4ff","#1070b0"],["#ff3aff","#a010a0"],["#ffffff","#9a9aa8"]]};
 export const BOTTLE = [".cc.",".gg.",".gg.","gggg","gwwg","gwwg","gwwg","gggg","gggg"];
 export const BOTTLEPAL = {"c":"#8a8f99","g":"#a8d4dc","w":"#f3e9d2"};
 export const CAN = ["ssss","rrrr","rwwr","rrrr","rrrr","ssss"];
