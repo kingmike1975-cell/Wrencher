@@ -234,7 +234,7 @@ const cv = host.screenCanvas, ctx = cv.getContext('2d');
 // and every sprite grid is Scale2x-smoothed into half-size pixels. The P key flips 1x/2x live for comparison
 let PXD = 2;
 const buf = host.worldCanvas;
-const b = buf.getContext('2d');
+let b = buf.getContext('2d');   // let: cached() points it at a layer canvas while a static backdrop is painted
 function setDensity(d){
   PXD = d; buf.width = W*PXD; buf.height = H*PXD; b.setTransform(PXD, 0, 0, PXD, 0, 0);
   const el = document.getElementById('pxd'); if (el) el.textContent = 'PIXELS ' + PXD + 'X';
@@ -1534,7 +1534,7 @@ function drawParts(){
   for (const p of parts){
     b.fillStyle = p.c;
     if (p.heart){ const x = Math.round(p.x), y = Math.round(p.y); b.fillRect(x, y, 2, 2); b.fillRect(x + 3, y, 2, 2); b.fillRect(x, y + 1, 5, 2); b.fillRect(x + 1, y + 3, 3, 1); b.fillRect(x + 2, y + 4, 1, 1); continue; }
-    const z = (p.s || 1) + (p.grow && p.life < 1 ? 1 : 0); b.fillRect(Math.round(p.x - (z-1)/2), Math.round(p.y - (z-1)/2), z, z);
+    const z0 = (p.s || 1) + (p.grow && p.life < 1 ? 1 : 0), z = !p.grow && p.life < 0.12 ? z0/2 : z0; b.fillRect(Math.round(p.x - (z-1)/2), Math.round(p.y - (z-1)/2), z, z);
   }
 }
 function hearts(x, y, n){ for (let i=0;i<n;i++) parts.push({x:x + (Math.random()-.5)*24, y:y + (Math.random()-.5)*10, vx:(Math.random()-.5)*22, vy:-14 - Math.random()*22, life:1 + Math.random()*0.8, c:Math.random() < .5 ? '#ff75a1' : '#ff4975', g:-4, heart:true}); }
@@ -1691,6 +1691,76 @@ function updateCamera(dt){
   cam.cx = clamp(cx, vw, W - vw); cam.cy = clamp(cy, vh, H - vh);
 }
 
+// a backdrop that never changes is painted once into its own canvas, then blitted every frame after that:
+// the detail pass costs nothing on the phone once a level is up
+const LAYERS = new Map();
+function cached(key, paint){
+  let L = LAYERS.get(key);
+  if (!L || L.pxd !== PXD){
+    const c = document.createElement('canvas'); c.width = W*PXD; c.height = H*PXD;
+    const g = c.getContext('2d'), real = b; g.setTransform(PXD, 0, 0, PXD, 0, 0);
+    b = g; try { paint(); } finally { b = real; }
+    if (LAYERS.size > 12) LAYERS.clear();
+    L = {c, pxd:PXD}; LAYERS.set(key, L);
+  }
+  b.drawImage(L.c, 0, 0, W, H);
+}
+// ---------- detail pass: half-pixel shading on the double-density buffer ----------
+// lit() and shd() lay translucent white or black, so they suit whatever palette is underneath (shift colours, outfits, farm themes)
+const LIT_C = {}, SHD_C = {};
+function lit(x, y, w, h, a){ b.fillStyle = LIT_C[a] || (LIT_C[a] = `rgba(255,255,255,${a})`); b.fillRect(x, y, w, h); }
+function shd(x, y, w, h, a){ b.fillStyle = SHD_C[a] || (SHD_C[a] = `rgba(0,0,0,${a})`); b.fillRect(x, y, w, h); }
+// a raised box: light along the top and left edges, shade along the bottom and right
+function bevel(x, y, w, h, a = 0.3, e = 0.5){ lit(x, y, w, e, a); lit(x, y + e, e, h - e, a*0.6); shd(x, y + h - e, w, e, a); shd(x + w - e, y + e, e, h - e*2, a*0.7); }
+// a soft halo: two crossed boxes per ring, stacking up toward the middle
+function glow(cx, cy, r, col, a){
+  const ga = b.globalAlpha; b.fillStyle = col; b.globalAlpha = ga*a/r;
+  for (let i=r; i>0; i--){ b.fillRect(cx - i, cy - i*0.6, i*2, i*1.2); b.fillRect(cx - i*0.6, cy - i, i*1.2, i*2); }
+  b.globalAlpha = ga;
+}
+// the dark patch where feet meet the floor
+function footShadow(x, y, w){ shd(Math.round(x) - w/2, y, w, 1, 0.32); shd(Math.round(x) - w/2 + 1, y + 1, w - 2, 0.5, 0.16); }
+// a ceiling lamp's halo, its pool of light on the floor, and dust drifting through the cone
+function lampFx(lx, cy, fy, t, col){
+  glow(lx, cy + 3.5, 5, col, 0.3);
+  b.fillStyle = col; b.globalAlpha = 0.2; b.fillRect(lx - 22, fy, 44, 1); b.globalAlpha = 0.16; b.fillRect(lx - 12, fy, 24, 1);
+  for (let i=0; i<4; i++){
+    const k = (t*0.06 + i*0.27 + lx*0.013) % 1, yy = cy + 6 + k*(fy - cy - 9), xx = lx + Math.sin(t*0.5 + i*2.1 + lx)*(2 + 15*k);
+    b.globalAlpha = 0.55*Math.sin(k*Math.PI); b.fillRect(Math.round(xx*2)/2, Math.round(yy*2)/2, 0.5, 0.5);
+  }
+  b.globalAlpha = 1;
+}
+// plumbing and clutter on the back wall, kept in the wall's own tones so nothing reads as a thing to fix
+function drawWallDetail(t, nuke){
+  for (let f=0; f<3; f++){
+    const top = f === 2 ? 28 : FY[f+1] + 6, fy = FY[f];
+    for (const px of (f % 2 ? [96, 246] : [78, 226])){
+      // a riser pipe with collars and a bracket
+      shd(px, top, 3, fy - top, 0.3); lit(px, top, 0.5, fy - top, 0.14); shd(px + 2.5, top, 0.5, fy - top, 0.25);
+      for (const cy of [top + 7, fy - 13]){ shd(px - 0.5, cy, 4, 2, 0.35); lit(px - 0.5, cy, 4, 0.5, 0.18); }
+      shd(px + 3, top + 20, 2, 1, 0.3);
+    }
+    // a conduit along the top of the wall, dipping to a junction box
+    const jx = f % 2 ? 206 : 110;
+    shd(0, top + 4, W, 1, 0.22); lit(0, top + 4, W, 0.5, 0.07);
+    shd(jx, top + 5, 1, 6, 0.22); shd(jx - 2, top + 10, 5, 5, 0.4); lit(jx - 2, top + 10, 5, 0.5, 0.16); lit(jx - 1, top + 12, 0.5, 0.5, 0.5);
+    if (!nuke){
+      // a faded poster: red field, a star, two lines of small print
+      const qx = [100, 204, 244][f], qy = fy - 34;
+      shd(qx - 0.5, qy - 0.5, 11, 14, 0.3); b.fillStyle = 'rgba(214,74,58,0.5)'; b.fillRect(qx, qy, 10, 13);
+      b.fillStyle = 'rgba(250,214,110,0.6)'; b.fillRect(qx + 4, qy + 2, 2, 0.5); b.fillRect(qx + 3, qy + 2.5, 4, 1); b.fillRect(qx + 4, qy + 3.5, 2, 0.5); b.fillRect(qx + 3.5, qy + 4, 1, 0.5); b.fillRect(qx + 5.5, qy + 4, 1, 0.5);
+      lit(qx + 2, qy + 7.5, 6, 0.5, 0.4); lit(qx + 2, qy + 9, 6, 0.5, 0.4); lit(qx + 3, qy + 10.5, 4, 0.5, 0.4); lit(qx, qy, 10, 0.5, 0.2); lit(qx + 8.5, qy, 1.5, 1.5, 0.25);
+    }
+  }
+}
+// the works clock: its minute hand creeps round with the shift
+function drawWallClock(t){
+  const kx = 232, ky = FY[1] - 34;
+  shd(kx - 4.5, ky - 4.5, 9, 9, 0.45); b.fillStyle = 'rgba(243,233,202,0.75)'; b.fillRect(kx - 3.5, ky - 2.5, 7, 5); b.fillRect(kx - 2.5, ky - 3.5, 5, 7);
+  const ha = t*0.35 - Math.PI/2; b.fillStyle = '#1b1830';
+  for (let i=0; i<=5; i++) b.fillRect(Math.round((kx - 0.25 + Math.cos(ha)*i*0.5)*2)/2, Math.round((ky - 0.25 + Math.sin(ha)*i*0.5)*2)/2, 0.5, 0.5);
+  b.fillRect(kx - 0.5, ky - 2, 0.5, 2); b.fillStyle = '#e7252f'; b.fillRect(kx - 0.5, ky - 0.5, 0.5, 0.5);
+}
 // ---------- world render (low-res buffer) ----------
 function drawGirder(y, h){
   const gp = GIRDER_PALS[(G.shift - 1) % GIRDER_PALS.length];
@@ -1699,6 +1769,10 @@ function drawGirder(y, h){
   b.fillStyle = gp.lo; b.fillRect(0, y+h-1, W, 1);
   b.fillStyle = gp.x;
   for (let x=0; x<W; x+=8) for (let k=0; k<h-2; k++){ b.fillRect(x+k, y+1+k, 1, 1); b.fillRect(x+7-k, y+1+k, 1, 1); }
+  // flange shine, rivets where the lattice meets it, and the shade it throws down the wall
+  lit(0, y + 1, W, 0.5, 0.22); shd(0, y + h - 1.5, W, 0.5, 0.3);
+  for (let x=0; x<W; x+=8){ lit(x - 0.5, y + 0.5, 1, 0.5, 0.6); if (h > 4) lit(x + 3.5, y + h - 1, 1, 0.5, 0.35); }
+  shd(0, y + h, W, 1.5, 0.3); shd(0, y + h + 1.5, W, 1.5, 0.15);
 }
 // a drawn arm: sleeve from the shoulder to the hand, w world px thick. Pair it with a sprite that has that arm taken off
 function drawArm(sx, sy, hx, hy, sleeve, skin, w = 1.5){
@@ -1728,6 +1802,13 @@ function drawSmallMachine(m, t){
   if (dead) lc = '#110f19'; else if (m.health < 30) lc = (Math.floor(t*8) % 2) ? '#ff4949' : '#7d0b0b'; else if (m.health < 60) lc = '#f9cd48';
   b.fillStyle = '#181d2f'; b.fillRect(x0+6, y0+4, 3, 3);
   b.fillStyle = lc; b.fillRect(x0+7, y0+5, 1, 1);
+  // detail pass
+  shd(x0 - 1, y0 + 11, 12, 1, 0.3);
+  bevel(x0, y0 + 2, 10, 7); shd(x0 + 1, y0 + 4, 4, 0.5, 0.35); shd(x0 + 1, y0 + 4, 0.5, 4, 0.25);
+  lit(x0 + 2, y0 + 5.5, 2, 0.5, 0.2); lit(x0 + 2, y0 + 6.5, 2, 0.5, 0.2);
+  lit(x0 + 2 + spin, y0, 1, 0.5, 0.7); shd(x0 + 3.5 + spin, y0 + 0.5, 0.5, 1.5, 0.3);
+  lit(x0 + 0.5, y0 + 2.5, 0.5, 0.5, 0.6); lit(x0 + 9, y0 + 2.5, 0.5, 0.5, 0.4);
+  if (!dead) glow(x0 + 7.5, y0 + 5.5, 3, lc, 0.35); else { shd(x0 + 3, y0 + 2, 0.5, 2, 0.6); shd(x0 + 3.5, y0 + 4, 0.5, 1.5, 0.6); shd(x0 + 2, y0 + 2, 6, 1, 0.25); }
   b.fillStyle = '#110f19'; b.fillRect(x0+1, y0-4, 8, 3);
   b.fillStyle = dead ? '#43414d' : m.health < 30 ? '#ff5858' : m.health < 60 ? '#f9cd48' : '#52de6f';
   b.fillRect(x0+2, y0-3, Math.max(dead ? 6 : 0, Math.round(6*m.health/100)), 1);
@@ -1750,6 +1831,22 @@ function drawMachine(m, t){
   if (dead) lc = '#110f19'; else if (m.health < 30) lc = (Math.floor(t*6) % 2) ? '#ff4949' : '#7d0b0b'; else if (m.health < 60) lc = '#f9cd48';
   b.fillStyle = '#181d2f'; b.fillRect(x0+12, y0+8, 5, 5);
   b.fillStyle = lc; b.fillRect(x0+13, y0+9, 3, 3);
+  // detail pass: a contact shadow, bevelled casing with rivets, a recessed vent, piston shine, a pressure gauge, lamp glow
+  shd(x0 - 1, y0 + 20, 20, 1, 0.3);
+  bevel(x0, y0 + 5, 18, 13);
+  for (const [rx, ry] of [[1, 6], [16.5, 6], [1, 16.5], [16.5, 16.5]]) lit(x0 + rx, y0 + ry, 0.5, 0.5, 0.6);
+  shd(x0 + 2, y0 + 8, 9, 0.5, 0.4); shd(x0 + 2, y0 + 8.5, 0.5, 7.5, 0.3); lit(x0 + 2, y0 + 15.5, 9, 0.5, 0.18); lit(x0 + 10.5, y0 + 8.5, 0.5, 7, 0.14);
+  for (let i=0; i<3; i++){ lit(x0 + 3, y0 + 10 + i*2, 7, 0.5, 0.22); shd(x0 + 3, y0 + 11 + i*2, 7, 0.5, 0.3); }
+  lit(x0 + 8, y0 + 3, 0.5, 2 + stroke, 0.65); shd(x0 + 9.5, y0 + 3, 0.5, 2 + stroke, 0.35);
+  shd(x0 + 3, y0 - stroke + 3, 12, 1, 0.28); lit(x0 + 3, y0 - stroke + 1, 0.5, 2, 0.3); shd(x0 + 14.5, y0 - stroke + 1, 0.5, 2, 0.25);
+  lit(x0 + 4.5, y0 - stroke + 2, 0.5, 0.5, 0.6); lit(x0 + 13, y0 - stroke + 2, 0.5, 0.5, 0.6);
+  lit(x0 + 1, y0 + 18, 3, 0.5, 0.2); lit(x0 + 14, y0 + 18, 3, 0.5, 0.2);
+  b.fillStyle = '#181d2f'; b.fillRect(x0 + 12.5, y0 + 14, 4, 3);
+  b.fillStyle = dead ? '#6a6a78' : '#f3e9ca'; b.fillRect(x0 + 13, y0 + 14.5, 3, 2);
+  b.fillStyle = dead ? '#262232' : '#e7252f'; b.fillRect(x0 + 13 + (dead ? 0 : Math.round((m.health/100*2.5 + (m.health < 30 ? Math.random()*0.6 : 0))*2)/2), y0 + 15, 0.5, 1.5);
+  lit(x0 + 13, y0 + 9, 1.5, 0.5, 0.6); lit(x0 + 13, y0 + 9.5, 0.5, 1, 0.4);
+  if (!dead) glow(x0 + 14.5, y0 + 10.5, 4, lc, 0.3);
+  else { shd(x0 + 3, y0 + 5, 12, 1.5, 0.25); shd(x0 + 6, y0 + 5, 0.5, 1.5, 0.7); shd(x0 + 5.5, y0 + 6.5, 0.5, 1.5, 0.7); shd(x0 + 6, y0 + 8, 0.5, 1, 0.7); shd(x0 + 15, y0 + 13, 0.5, 2, 0.7); shd(x0 + 15.5, y0 + 15, 0.5, 2, 0.7); }
   // health bar, readable from anywhere
   b.fillStyle = '#110f19'; b.fillRect(x0+2, y0-6, 14, 3);
   b.fillStyle = dead ? '#43414d' : m.health < 30 ? '#ff5858' : m.health < 60 ? '#f9cd48' : '#52de6f';
@@ -1766,6 +1863,10 @@ function drawNukeGirder(y, h){
   if (h < 5) return;
   b.fillStyle = '#1d1b27'; b.fillRect(0, y+1, W, 3);
   b.fillStyle = '#f4cf49'; for (let x=-4; x<W; x+=8) for (let k=0; k<3; k++) b.fillRect(x + k, y+1+k, 4, 1);
+  // a worn shine on the hazard edge, pitted concrete below it, and the shade the slab throws down the wall
+  lit(0, y + 1, W, 0.5, 0.25); shd(0, y + 3.5, W, 0.5, 0.3);
+  for (let x=3; x<W; x+=11){ shd(x, y + 4.5, 1, 0.5, 0.3); lit(x + 5, y + 4, 0.5, 0.5, 0.3); }
+  shd(0, y + h, W, 1.5, 0.3); shd(0, y + h + 1.5, W, 1.5, 0.15);
 }
 function drawStair(l){
   const yb = FY[l.a], yt = FY[l.b], dir = Math.sign(l.x1 - l.x0), run = Math.abs(l.x1 - l.x0), rise = yb - yt, n = 8;
@@ -1775,17 +1876,23 @@ function drawStair(l){
   for (let i=0; i<n; i++){
     const y = Math.round(yb - rise*(i + 1)/n), x = Math.round(l.x0 + dir*run*(i + 0.5)/n);
     b.fillStyle = '#8a94a8'; b.fillRect(x - 3, y, 7, 2); b.fillStyle = '#b2bcd0'; b.fillRect(x - 3, y, 7, 1);
+    lit(x - 3, y, 7, 0.5, 0.35); shd(x - 3, y + 2, 7, 1, 0.3);
   }
   b.fillStyle = '#f4cf49';
   for (let i=0; i<=run; i++) b.fillRect(Math.round(l.x0 + dir*i), Math.round(yb - rise*i/run) - 13, 1, 1);
   for (let i=0; i<=n; i+=2) b.fillRect(Math.round(l.x0 + dir*run*i/n), Math.round(yb - rise*i/n) - 13, 1, 13);
 }
 function drawNukeBack(t){
+  cached('nukewall', () => {
   b.fillStyle = '#0c2627'; b.fillRect(0, 0, W, H);
   b.fillStyle = '#13383a';
   for (let y=28, r=0; y<H; y+=8, r++) for (let x=(r%2)*8, i=0; x<W; x+=16, i++) if ((i*7 + r*13) % 11 < 2) b.fillRect(x+1, y+1, 15, 7);
   b.fillStyle = '#123335';
   for (let y=28, r=0; y<H; y+=8, r++){ b.fillRect(0, y, W, 1); for (let x=(r%2)*8; x<W; x+=16) b.fillRect(x, y, 1, 8); }
+  for (let y=28, r=0; y<H; y+=8, r++){ shd(0, y + 7.5, W, 0.5, 0.14); for (let x=(r%2)*8, i=0; x<W; x+=16, i++) if ((i*7 + r*13) % 11 < 2) lit(x + 1, y + 1, 15, 0.5, 0.14); }
+  drawWallDetail(t, true);
+  });
+  drawWallClock(t);
   for (let f=0; f<3; f++){
     const wy = FY[f] - 40;
     for (const wx of [146, 282]){
@@ -1802,6 +1909,7 @@ function drawNukeBack(t){
         b.fillRect(wx + 7 + Math.round(Math.sin(st*5 + i)*2), wy + 12 - Math.round(st*10), 4 + Math.round(st*3), 3);
       }
       b.fillStyle = '#1a3d40'; b.fillRect(wx+8, wy, 1, 24); b.fillRect(wx, wy+11, 18, 1);
+      windowTrim(wx, wy);
     }
     const cy = f === 2 ? 28 : FY[f+1] + 6;
     for (const lx of [30, 186, 300]){
@@ -1809,6 +1917,7 @@ function drawNukeBack(t){
       b.beginPath(); b.moveTo(lx-2, cy+3); b.lineTo(lx+2, cy+3); b.lineTo(lx+22, FY[f]); b.lineTo(lx-22, FY[f]); b.closePath(); b.fill();
       b.fillStyle = '#49522a'; b.fillRect(lx-3, cy, 6, 3);
       b.fillStyle = '#dbffa7'; b.fillRect(lx-1, cy+3, 2, 1);
+      lit(lx - 3, cy, 6, 0.5, 0.25);
     }
     b.fillStyle = '#26334b'; b.fillRect(0, FY[f]-18, 7, 18); b.fillRect(W-7, FY[f]-18, 7, 18);
     b.fillStyle = '#09080c'; b.fillRect(0, FY[f]-17, 6, 17); b.fillRect(W-6, FY[f]-17, 6, 17);
@@ -1820,10 +1929,13 @@ function drawNukeBack(t){
   b.fillStyle = '#1d1b27'; b.fillRect(104, 31, 112, 13);
   b.fillStyle = '#f4cf49'; for (let x=104; x<216; x+=4){ b.fillRect(x, 31, 2, 1); b.fillRect(x + 2, 43, 2, 1); }
   for (const fx of [106, 205]){ b.fillStyle = '#f4cf49'; b.fillRect(fx, 33, 9, 9); drawTrefoil(fx + 1, 34, '#191723'); }
+  cached('nukefloors' + LAY.ladders.map(l => l.x0 + ':' + l.x1 + ':' + l.a).join(), () => {
   drawNukeGirder(24, 4);
   for (const y of FY) drawNukeGirder(y, 6);
   b.fillStyle = '#110b1e'; b.fillRect(0, FY[0]+6, W, H - FY[0] - 6);
   for (const l of LAY.ladders) drawStair(l);
+  });
+  for (let f=0; f<3; f++) for (const lx of [30, 186, 300]) lampFx(lx, f === 2 ? 28 : FY[f+1] + 6, FY[f], t, '#dbffa7');
 }
 function drawRegulator(m, t){
   // temperature regulators: a cream cabinet with a big dial, a cooling fan on top and a coolant pipe down the side
@@ -1847,6 +1959,8 @@ function drawRegulator(m, t){
     b.fillStyle = dead ? '#672713' : '#e7252f'; b.fillRect(x0+2, y0, 5, 1); b.fillRect(x0+4, y0-1, 1, 3);
     if (spin){ b.fillRect(x0+3, y0-1, 1, 1); b.fillRect(x0+5, y0+1, 1, 1); } else { b.fillRect(x0+5, y0-1, 1, 1); b.fillRect(x0+3, y0+1, 1, 1); }
     if (dead){ b.fillStyle = core; b.fillRect(x0+3, y0+3, 1, 1); b.fillRect(x0+1, y0+6, 2, 1); b.fillRect(x0+4, y0+5, 1, 2); }
+    shd(x0 - 1, y0 + 12, 12, 1, 0.3); bevel(x0, y0 + 2, 10, 8, 0.25); lit(x0 + 6, y0 + 3, 0.5, 6, 0.3);
+    if (!dead) glow(x0 + 3, y0 + 5, 2.5, lamp, 0.3); else glow(x0 + 3.5, y0 + 5.5, 4, core, 0.25);
     b.fillStyle = '#110f19'; b.fillRect(x0+1, y0-5, 8, 3);
     b.fillStyle = barCol; b.fillRect(x0+2, y0-4, Math.max(dead ? 6 : 0, Math.round(6*h)), 1);
     return;
@@ -1881,7 +1995,15 @@ function drawRegulator(m, t){
   else {
     // blown open: the core glows through
     b.fillStyle = core; b.fillRect(x0+4, y0+1, 3, 2); b.fillRect(x0+9, y0+1, 2, 2); b.fillRect(x0+6, y0+3, 4, 2); b.fillRect(x0+12, y0+12, 1, 3);
+    glow(x0 + 8, y0 + 2.5, 6, core, 0.3);
   }
+  // detail pass: contact shadow, bevelled cabinet and fan housing, glass on the dial, shine down the pipe, lamp glow
+  shd(x0 - 1, y0 + 20, 21, 1, 0.3);
+  bevel(x0, y0 + 4, 16, 14, 0.25); bevel(x0 + 2, y0, 12, 4, 0.3);
+  lit(x0 + 3, y0 + 7, 6, 0.5, 0.5); lit(x0 + 3, y0 + 7.5, 0.5, 2.5, 0.4); shd(x0 + 3, y0 + 12.5, 6, 0.5, 0.18); shd(x0 + 8.5, y0 + 7.5, 0.5, 5, 0.12);
+  lit(x0 + 17, y0 + 6, 0.5, 14, 0.4); shd(x0 + 18.5, y0 + 8, 0.5, 12, 0.3);
+  for (const ry of [5, 13.5]){ lit(x0 + 1, y0 + ry, 0.5, 0.5, 0.6); lit(x0 + 14.5, y0 + ry, 0.5, 0.5, 0.6); }
+  if (!dead) glow(x0 + 13, y0 + 9, 3.5, lamp, 0.3);
   b.fillStyle = '#110f19'; b.fillRect(x0+2, y0-6, 14, 3);
   b.fillStyle = barCol; b.fillRect(x0+3, y0-5, Math.max(dead ? 12 : 0, Math.round(12*h)), 1);
 }
@@ -1936,32 +2058,49 @@ function drawDuskWindow(wx, wy, t){
   if (Math.floor(t*1.3 + wx) % 5) { b.fillStyle = '#fff6c0'; b.fillRect(wx+4, wy+4, 1, 1); }
   b.fillStyle = '#2b1f52'; b.fillRect(wx+8, wy, 1, 24); b.fillRect(wx, wy+11, 18, 1);
 }
+// a window's stone sill, the reveal's shadow and a streak of glare on the glass
+function windowTrim(wx, wy){
+  shd(wx + 1, wy + 1, 16, 1, 0.3); shd(wx + 1, wy + 2, 0.5, 21, 0.25);
+  lit(wx + 3, wy + 3, 0.5, 5, 0.3); lit(wx + 4, wy + 3, 0.5, 2.5, 0.2); lit(wx + 11, wy + 14, 0.5, 5, 0.25);
+  lit(wx - 1, wy + 24, 20, 1, 0.22); shd(wx - 1, wy + 25, 20, 1, 0.3); lit(wx - 1, wy + 24, 20, 0.5, 0.2);
+}
 function renderWorld(t){
   if (G.nuke) drawNukeBack(t); else {
   const gw = GIRDER_PALS[(G.shift - 1) % GIRDER_PALS.length];
+  cached('wall' + (G.shift - 1) % GIRDER_PALS.length, () => {
   b.fillStyle = gw.wall; b.fillRect(0, 0, W, H);
   // a few bricks catch the lamplight, the rest is mortar lines
   b.fillStyle = gw.lit;
   for (let y=28, r=0; y<H; y+=6, r++) for (let x=(r%2)*6, i=0; x<W; x+=12, i++) if ((i*7 + r*13) % 11 < 2) b.fillRect(x+1, y+1, 11, 5);
   b.fillStyle = gw.brick;
   for (let y=28, r=0; y<H; y+=6, r++){ b.fillRect(0, y, W, 1); for (let x=(r%2)*6; x<W; x+=12) b.fillRect(x, y, 1, 6); }
+  // the lamp-lit bricks get a lighter top edge; every brick a hair of shade along its foot
+  for (let y=28, r=0; y<H; y+=6, r++){ shd(0, y + 5.5, W, 0.5, 0.12); for (let x=(r%2)*6, i=0; x<W; x+=12, i++) if ((i*7 + r*13) % 11 < 2) lit(x + 1, y + 1, 11, 0.5, 0.16); }
+  drawWallDetail(t, false);
+  });
+  drawWallClock(t);
   for (let f=0; f<3; f++){
     const wy = FY[f] - 40;
-    for (const wx of [146, 282]) drawDuskWindow(wx, wy, t);
+    for (const wx of [146, 282]){ drawDuskWindow(wx, wy, t); windowTrim(wx, wy); }
     const cy = f === 2 ? 28 : FY[f+1] + 6;
     for (const lx of [30, 186, 300]){
       b.fillStyle = 'rgba(255,205,120,0.11)';
       b.beginPath(); b.moveTo(lx-2, cy+3); b.lineTo(lx+2, cy+3); b.lineTo(lx+22, FY[f]); b.lineTo(lx-22, FY[f]); b.closePath(); b.fill();
       b.fillStyle = '#503d29'; b.fillRect(lx-3, cy, 6, 3);
       b.fillStyle = '#ffe5a7'; b.fillRect(lx-1, cy+3, 2, 1);
+      lit(lx - 3, cy, 6, 0.5, 0.25);
     }
     b.fillStyle = '#2f2144'; b.fillRect(0, FY[f]-18, 7, 18); b.fillRect(W-7, FY[f]-18, 7, 18);
     b.fillStyle = '#09080c'; b.fillRect(0, FY[f]-17, 6, 17); b.fillRect(W-6, FY[f]-17, 6, 17);
+    lit(6.5, FY[f] - 18, 0.5, 18, 0.2); lit(W - 7, FY[f] - 18, 0.5, 18, 0.2); lit(0, FY[f] - 18, 7, 0.5, 0.2); lit(W - 7, FY[f] - 18, 7, 0.5, 0.2);
   }
   // banner
   b.fillStyle = '#7d6a5f'; b.fillRect(114, 28, 1, 4); b.fillRect(205, 28, 1, 4);
   b.fillStyle = '#c01618'; b.fillRect(104, 31, 112, 13);
   b.fillStyle = '#850f12'; b.fillRect(104, 43, 112, 1);
+  // cloth: light along the top hem, soft folds, a shadow on the bricks behind
+  lit(104, 31, 112, 0.5, 0.3); for (const fx of [120, 141, 178, 199]){ shd(fx, 31.5, 2, 11.5, 0.1); lit(fx + 2, 31.5, 1, 11.5, 0.08); }
+  shd(105, 44, 112, 1.5, 0.3);
   for (const fx of [106, 205]){
     b.fillStyle = '#1952cd'; b.fillRect(fx, 33, 9, 3);
     b.fillStyle = '#f3e9ca'; b.fillRect(fx, 36, 9, 3);
@@ -1969,22 +2108,29 @@ function renderWorld(t){
     b.fillStyle = '#f4cf49'; b.fillRect(fx+3, 35, 3, 3);
     b.fillStyle = '#e7252f'; b.fillRect(fx+4, 36, 1, 1);
   }
+  cached('floors' + (G.shift - 1) % GIRDER_PALS.length, () => {
   drawGirder(24, 4);
   for (const y of FY) drawGirder(y, 6);
   b.fillStyle = '#110b1e'; b.fillRect(0, FY[0]+6, W, H - FY[0] - 6);
   // ladders
-  b.fillStyle = '#34e8e9';
   for (const l of LADDERS){
     const top = FY[l.b], bot = FY[l.a];
+    shd(l.x - 2.5, top + 6, 7, bot - top - 6, 0.16);   // its shadow on the wall
+    b.fillStyle = '#34e8e9';
     b.fillRect(l.x-4, top, 1, bot-top); b.fillRect(l.x+3, top, 1, bot-top);
     for (let y=top+2; y<bot; y+=4) b.fillRect(l.x-4, y, 8, 1);
+    lit(l.x - 4, top, 0.5, bot - top, 0.55); shd(l.x - 3.5, top, 0.5, bot - top, 0.2); lit(l.x + 3, top, 0.5, bot - top, 0.55); shd(l.x + 3.5, top, 0.5, bot - top, 0.2);
+    for (let y=top+2; y<bot; y+=4){ lit(l.x - 3, y, 6, 0.5, 0.45); shd(l.x - 3, y + 1, 6, 0.5, 0.3); }
   }
   for (const p of PIPES){
     const y = FY[p.f];
     b.fillStyle = '#5b6c49'; b.fillRect(p.x-3, y-4, 7, 4);
     b.fillStyle = '#869b6d'; b.fillRect(p.x-3, y-4, 7, 1);
     b.fillStyle = '#e7252f'; b.fillRect(p.x, y-6, 1, 2); b.fillRect(p.x-1, y-6, 3, 1);
+    lit(p.x - 3, y - 3.5, 7, 0.5, 0.2); shd(p.x - 3, y - 1, 7, 1, 0.25); shd(p.x - 4, y, 9, 1, 0.3); lit(p.x - 1, y - 6, 1, 0.5, 0.5);
   }
+  });
+  for (let f=0; f<3; f++) for (const lx of [30, 186, 300]) lampFx(lx, f === 2 ? 28 : FY[f+1] + 6, FY[f], t, '#ffe5a7');
   }
   for (const m of machines){
     if (m.oil < 1) continue;
@@ -1992,6 +2138,7 @@ function renderWorld(t){
     b.fillStyle = '#07070b'; b.fillRect(Math.round(m.x) - r, y-1, r*2, 2);
     b.fillStyle = '#42239b'; for (let i=-r+2; i<r-2; i+=5) b.fillRect(Math.round(m.x)+i, y-1, 2, 1);
     b.fillStyle = '#247c65'; for (let i=-r+4; i<r-2; i+=7) b.fillRect(Math.round(m.x)+i, y-1, 1, 1);
+    lit(Math.round(m.x) - r + 1 + ((Math.floor(t*6) + m.f*3) % Math.max(2, r*2 - 3)), y - 1, 1.5, 0.5, 0.55);
   }
   for (const m of machines){
     if (G.phase === 'intro' && (introKind() === 'fix' || (introKind() === 'small' && m.small))){
@@ -2027,6 +2174,7 @@ function renderWorld(t){
     const pal = (a.flinch > 0 && Math.floor(t*30) % 2) ? burPal('#ffffff', '#dddddd') : a.glowT > 0 && Math.floor(t*12) % 2 ? GLOW_PAL : RANK_PAL[a.rank];
     const fr = (Math.floor(a.walkT*8) % 2) ? BUR2 : BUR;
     const x = Math.round(a.x), y = Math.round(a.y) + (a.climb ? 0 : hopAt(a.f, a.x));
+    if (!a.climb) footShadow(x, Math.round(a.y), 9);
     spr(b, fr, pal, x-5, y-14, a.face < 0); drawHatFire(a, x, y - 14, t);
     if (a.hawk > 0){ b.fillStyle = '#f8a88b'; b.fillRect(x + (a.face > 0 ? 3 : -4), y-10, 2, 2); }
     if (a.state !== 'retreat'){
@@ -2056,12 +2204,14 @@ function renderWorld(t){
     let dfr = DOG;
     if (dog.state === 'eat') dfr = (Math.floor(dog.walkT*5) % 2) ? DOG_EATING : DOG;
     else if (Math.floor(dog.walkT*10) % 2) dfr = DOG2;
+    footShadow(x, y, 15);
     if (dog.state === 'eat') spr(b, MEAT, MEATPAL, x + dog.face*9 - 3, y-4);
     menaceSpr(dfr, menacePal(DOGPAL, t, 2), x - 9, y - 7*M_, dog.face < 0);
   }
   for (const l of ladies){
     const fr = l.state !== 'busy' && l.pauseT <= 0 && Math.floor(l.walkT*6) % 2 ? LADY2 : LADY;
     const x = Math.round(l.x), y = Math.round(l.y) + hopAt(l.f, l.x);
+    footShadow(x, Math.round(l.y), 17);
     spr(b, fr, LADYPAL, x-10, y-28, l.face < 0, 2);   // double size: she looms
     drawGoop(l, x, y - 27, t);
   }
@@ -2098,6 +2248,7 @@ function renderWorld(t){
 function drawPlayer(t){
   const x = Math.round(P.x), y = Math.round(P.y) + (P.climb ? 0 : hopAt(P.f, P.x));
   const pal = (P.sweat > 0 || P.dignity < 35) ? WPAL_HOT : WPAL;
+  if (!P.climb && !P.launch && FY.includes(Math.round(P.y))) footShadow(x, Math.round(P.y), P.down ? 16 : 9);
   if (P.down){
     b.save(); b.translate(x-7, y); b.rotate(-Math.PI/2); spr(b, WREN, pal, 0, 0); b.restore();
     drawWrench(x+8, y-1, 0, 5);
@@ -2109,6 +2260,7 @@ function drawPlayer(t){
   const flip = P.climb && !P.climb.stair ? (Math.floor(P.walkT*6) % 2 === 0) : P.face < 0;
   const grin = !G.farmPreview && smileNow(G.t);
   spr(b, fr, grin ? goldSmile(pal) : pal, x-5, y-14, flip);
+  if (!P.climb && (t % 3.7 < 0.11 || (t + 1.3) % 9.1 < 0.11)){ b.fillStyle = wornPal(pal).s; b.fillRect(flip ? x - 1.5 : x + 1, y - 10.5, 0.5, 1); }   // he blinks
   const f = P.face;
   if (grin && Math.floor(t*6) % 3 === 0){ b.fillStyle = '#ffffff'; b.fillRect(x + f*2, y - 9, 1, 1); }
   if (P.menaceT > 0 && Math.floor(t*10) % 2){ b.fillStyle = '#ff5748'; b.fillRect(x-6, y-15, 1, 1); b.fillRect(x+5, y-13, 1, 1); b.fillRect(x-5, y-4, 1, 1); b.fillRect(x+6, y-7, 1, 1); }
@@ -2914,23 +3066,51 @@ function renderBrawl(t){
   const B = BR, gp = GIRDER_PALS[(G.shift - 1) % GIRDER_PALS.length];
   const shx = B && B.shake > 0 ? Math.round((Math.random() - .5)*4) : 0;
   // back wall: brick, pipes, a gauge, a lamp, the level's girder
+  cached('brawl', () => {
   b.fillStyle = '#4c2727'; b.fillRect(0, 0, W, H);
   b.fillStyle = '#5d2a26';
   for (let y=0, r=0; y<128; y+=8, r++) for (let x=(r%2)*12 - 12; x<W; x+=24) b.fillRect(x + 1, y + 1, 22, 6);
   b.fillStyle = '#391c1c'; for (let y=7; y<128; y+=8) b.fillRect(0, y, W, 1);
+  // brickwork: a lit top edge and shaded foot on every course, odd bricks darker or chipped, grime creeping up from the floor
+  for (let y=0, r=0; y<128; y+=8, r++){ lit(0, y + 1, W, 0.5, 0.1); shd(0, y + 6, W, 1, 0.14);
+    for (let x=(r%2)*12 - 12, i=0; x<W; x+=24, i++){ const hsh = farmHash(i, r + 20); shd(x, y + 1, 1, 6, 0.25); lit(x + 1, y + 1, 0.5, 6, 0.08);
+      if (hsh % 5 === 0) shd(x + 1, y + 1, 22, 6, 0.12); else if (hsh % 7 === 0) lit(x + 1, y + 1, 22, 6, 0.05);
+      if (hsh % 9 === 0){ shd(x + 4 + (hsh >> 6) % 14, y + 2, 2, 1, 0.3); shd(x + 5 + (hsh >> 6) % 14, y + 3, 1, 0.5, 0.3); } } }
+  shd(0, 112, W, 16, 0.12); shd(0, 120, W, 8, 0.14); shd(0, 0, W, 16, 0.2);
+  });
   b.fillStyle = gp.base; b.fillRect(0, 16, W, 6); b.fillStyle = gp.hi; b.fillRect(0, 16, W, 1); b.fillStyle = gp.lo; b.fillRect(0, 21, W, 1);
+  lit(0, 17, W, 0.5, 0.22); for (let x=4; x<W; x+=12){ lit(x, 18.5, 1, 0.5, 0.5); shd(x, 19, 1, 0.5, 0.3); } shd(0, 22, W, 2, 0.3); shd(0, 24, W, 2, 0.14);
   b.fillStyle = '#5b6c49'; b.fillRect(0, 44, W, 5); b.fillStyle = '#869b6d'; b.fillRect(0, 44, W, 1);
   b.fillStyle = '#5b6c49'; b.fillRect(40, 44, 5, 84); b.fillRect(268, 22, 5, 106);
   b.fillStyle = '#91785b'; b.fillRect(36, 60, 13, 3); b.fillRect(264, 90, 13, 3);
+  // pipes: round, with a shine along the top or side, flanged joints, a slow drip
+  lit(0, 44.5, W, 0.5, 0.2); shd(0, 47.5, W, 1.5, 0.3); shd(0, 49, W, 1.5, 0.22);
+  for (const px of [40, 268]){ const y0 = px === 40 ? 49 : 22; lit(px + 1, y0, 0.5, 128 - y0, 0.3); shd(px + 3.5, y0, 1.5, 128 - y0, 0.3); shd(px + 5, y0, 1.5, 128 - y0, 0.2); }
+  for (const jx of [100, 200]){ shd(jx, 43, 4, 7, 0.3); lit(jx, 43, 4, 0.5, 0.3); lit(jx + 1, 44.5, 0.5, 0.5, 0.6); }
+  lit(36, 60, 13, 0.5, 0.35); shd(36, 62.5, 13, 0.5, 0.35); lit(264, 90, 13, 0.5, 0.35); shd(264, 92.5, 13, 0.5, 0.35);
+  { const k = (t*0.5) % 1; if (k < 0.7){ b.fillStyle = 'rgba(160,210,255,0.7)'; b.fillRect(202, 50 + k*k*110, 0.5, 1.5); } else { b.fillStyle = 'rgba(160,210,255,0.4)'; b.fillRect(200 - (k - 0.7)*10, 127.5, 5 + (k - 0.7)*20, 0.5); } }
   b.fillStyle = '#181d2f'; b.fillRect(282, 50, 22, 22); b.fillStyle = '#f3e9ca'; b.fillRect(284, 52, 18, 18);
   const ga = -2.4 + Math.sin(t*3)*0.4 + (B ? (1 - B.hp/B.max)*2.2 : 0);
   b.fillStyle = '#e7252f'; for (let i=0;i<8;i++) b.fillRect(Math.round(293 + Math.cos(ga)*i), Math.round(61 + Math.sin(ga)*i), 1, 1);
   b.fillStyle = '#c01618'; b.fillRect(70, 58, 52, 26); b.fillStyle = '#f4cf49'; b.fillRect(92, 64, 8, 8); b.fillStyle = '#850f12'; b.fillRect(70, 83, 52, 1);
+  // the flag hangs in folds, pinned at the corners; the gauge gets a glass face and a brass rim
+  shd(72, 84, 52, 2, 0.3); lit(70, 58, 52, 0.5, 0.3); for (const fx of [79, 91, 104, 114]){ shd(fx, 58.5, 3, 25, 0.1); lit(fx + 3, 58.5, 1.5, 25, 0.08); }
+  lit(70.5, 58.5, 1, 1, 0.6); lit(120.5, 58.5, 1, 1, 0.6); lit(92, 64, 8, 0.5, 0.4); shd(92, 71.5, 8, 0.5, 0.25);
+  bevel(282, 50, 22, 22, 0.4, 1); lit(286, 54, 6, 0.5, 0.6); lit(286, 54.5, 0.5, 4, 0.5); shd(284, 68.5, 18, 1.5, 0.12);
+  for (let i=0; i<7; i++){ const a = -2.6 + i*0.45; b.fillStyle = i > 4 ? '#e7252f' : '#261414'; b.fillRect(Math.round((293 + Math.cos(a)*7.5)*2)/2, Math.round((61 + Math.sin(a)*7.5)*2)/2, 0.5, 1); }
+  b.fillStyle = '#261414'; b.fillRect(292.5, 60.5, 1.5, 1.5);
   b.fillStyle = 'rgba(255,217,148,0.07)'; b.beginPath(); b.moveTo(156, 26); b.lineTo(164, 26); b.lineTo(230, 150); b.lineTo(90, 150); b.closePath(); b.fill();
   b.fillStyle = '#503d29'; b.fillRect(154, 22, 12, 4); b.fillStyle = '#ffe5a7'; b.fillRect(157, 26, 6, 2);
+  glow(160, 27, 9, '#ffe5a7', 0.45); lit(154, 22, 12, 0.5, 0.3);
+  for (let i=0; i<6; i++){ const k = (t*0.05 + i*0.17) % 1; b.globalAlpha = 0.5*Math.sin(k*Math.PI); b.fillStyle = '#ffe5a7'; b.fillRect(Math.round((160 + Math.sin(t*0.4 + i*2.3)*(6 + 50*k))*2)/2, Math.round((32 + k*92)*2)/2, 0.5, 0.5); } b.globalAlpha = 1;
   // floor
   b.fillStyle = '#2e2243'; b.fillRect(0, 128, W, 52);
   b.fillStyle = '#3c314e'; b.fillRect(0, 128, W, 1);
+  // the lamp's pool on the boards, boards crossing the room, darker toward the walls and the camera
+  b.fillStyle = 'rgba(255,217,148,0.045)';
+  for (const [rw, rh] of [[100, 23], [72, 16], [44, 9]]) for (let dy=-rh; dy<=rh; dy++){ const w = Math.round(rw*Math.sqrt(1 - (dy/rh)*(dy/rh))); b.fillRect(160 - w, 153 + dy, w*2, 1); }
+  for (const fy of [133, 140, 150, 163]){ shd(0, fy, W, 1, 0.2); lit(0, fy + 1, W, 0.5, 0.05); }
+  shd(0, 129, W, 3, 0.2); shd(0, 172, W, 8, 0.14);
   b.fillStyle = '#281d38'; for (let x=-40; x<W+40; x+=28) { b.beginPath(); b.moveTo(160 + (x-160)*0.35, 128); b.lineTo(160 + (x-160)*1.6, 180); b.lineTo(161 + (x-160)*1.6, 180); b.lineTo(161 + (x-160)*0.35, 128); b.fill(); }
   if (!B) return;
   if (B.rank === 3) renderWrenchFoe(B, t, shx); else if (B.rank === 4) renderBearFoe(B, t, shx); else if (B.rank === 5) renderWifeFoe(B, t, shx); else {
@@ -3786,22 +3966,60 @@ function drawFarmEndText(t){
 }
 
 // ---------- drawing the farm ----------
+const farmHash = (c, r) => (Math.imul(c + 11, 73856093) ^ Math.imul(r + 7, 19349663) ^ Math.imul(c*r + 3, 83492791)) >>> 0;
 function drawFarmTile(c, r, t){
   const x = c*FT, y = FOY + r*FT, ch = ftile(c, r), T = farmTheme();
   b.fillStyle = (c + r) % 2 ? T.grass[0] : T.grass[1]; b.fillRect(x, y, FT, FT);
   if ((c*7 + r*13) % 5 === 0){ b.fillStyle = T.speck; b.fillRect(x + 4, y + 5, 1, 2); b.fillRect(x + 10, y + 11, 1, 2); }
+  const hsh = farmHash(c, r), snow = T.crops[0] === 'ice', gc = (c + r) % 2 ? T.grass[0] : T.grass[1];
+  if (ch !== 'F' && ch !== 'D' && ch !== 'G'){
+    // blades of grass light and dark (drifts and hollows on the ice farm), and the odd wild flower
+    for (let i=0; i<4; i++){ const hx = (hsh >> (i*4)) & 15, hy = (hsh >> (i*4 + 14)) & 15;
+      lit(x + hx*0.9, y + hy*0.85, 0.5, 1.5, snow ? 0.5 : 0.16); shd(x + ((hx*7 + 5) % 15), y + ((hy*5 + 3) % 14), snow ? 1.5 : 0.5, snow ? 0.5 : 1.5, snow ? 0.08 : 0.14); }
+    if (!snow && hsh % 6 === 0){ const fx = x + 2 + (hsh >> 5) % 11, fy = y + 2 + (hsh >> 9) % 11;
+      b.fillStyle = ['#fff3d6', '#ffd65a', '#ff9ec0', '#c9a6ff'][(hsh >> 3) % 4]; b.fillRect(fx - 0.5, fy, 1.5, 0.5); b.fillRect(fx, fy - 0.5, 0.5, 1.5); b.fillStyle = '#f08a24'; b.fillRect(fx, fy, 0.5, 0.5); shd(fx, fy + 1, 0.5, 1, 0.2); }
+  }
   if (ch === 'F' || ch === 'D'){
     b.fillStyle = ch === 'F' ? T.soil[0] : T.path[0]; b.fillRect(x, y, FT, FT);
     b.fillStyle = ch === 'F' ? T.soil[1] : T.path[1]; for (let i=2; i<FT; i+=5) b.fillRect(x + 1, y + i, FT - 2, 1);
-  } else if (ch === 'G'){ b.fillStyle = T.gravel[0]; b.fillRect(x, y, FT, FT); b.fillStyle = T.gravel[1]; b.fillRect(x + 3, y + 3, 2, 2); b.fillRect(x + 10, y + 9, 2, 2); }
+    // ridged furrows (or ruts in the path), clods, and a sunken edge where the turf stops
+    for (let i=2; i<FT; i+=5){ lit(x + 1, y + i - 0.5, FT - 2, 0.5, 0.12); shd(x + 1, y + i + 1, FT - 2, 0.5, 0.16); }
+    for (let i=0; i<3; i++){ const hx = (hsh >> (i*4)) & 15, hy = (hsh >> (i*4 + 13)) & 15; lit(x + hx*0.9, y + hy*0.9, 1, 0.5, 0.14); shd(x + ((hx*5 + 7) % 15), y + ((hy*3 + 4) % 15), 1, 0.5, 0.2); }
+    if (ftile(c, r - 1) !== ch) shd(x, y, FT, 1, 0.22);
+    if (ftile(c - 1, r) !== ch) shd(x, y, 1, FT, 0.16);
+    if (ftile(c, r + 1) !== ch) lit(x, y + FT - 0.5, FT, 0.5, 0.14);
+  } else if (ch === 'G'){ b.fillStyle = T.gravel[0]; b.fillRect(x, y, FT, FT); b.fillStyle = T.gravel[1]; b.fillRect(x + 3, y + 3, 2, 2); b.fillRect(x + 10, y + 9, 2, 2);
+    for (let i=0; i<5; i++){ const hx = (hsh >> (i*3)) & 15, hy = (hsh >> (i*3 + 12)) & 15; lit(x + hx*0.9, y + hy*0.9, 1, 0.5, 0.22); shd(x + hx*0.9, y + hy*0.9 + 0.5, 1, 0.5, 0.2); }
+    lit(x + 3, y + 3, 2, 0.5, 0.2); lit(x + 10, y + 9, 2, 0.5, 0.2); }
   else if (ch === '#'){
     // a split-rail fence
+    shd(x + 7, y + 13.5, 6, 1.5, 0.2);
     b.fillStyle = '#753914'; b.fillRect(x + 6, y + 2, 4, 12);
-    b.fillStyle = '#b35921'; if (r === 0 || r === FROWS - 1){ b.fillRect(x, y + 5, FT, 2); b.fillRect(x, y + 10, FT, 2); } else { b.fillRect(x + 5, y, 2, FT); b.fillRect(x + 9, y, 2, FT); }
+    b.fillStyle = '#b35921'; if (r === 0 || r === FROWS - 1){ b.fillRect(x, y + 5, FT, 2); b.fillRect(x, y + 10, FT, 2); lit(x, y + 5, FT, 0.5, 0.3); lit(x, y + 10, FT, 0.5, 0.3); shd(x, y + 6.5, FT, 0.5, 0.3); shd(x, y + 11.5, FT, 0.5, 0.3); shd(x, y + 12.5, FT, 1, 0.12); }
+    else { b.fillRect(x + 5, y, 2, FT); b.fillRect(x + 9, y, 2, FT); lit(x + 5, y, 0.5, FT, 0.3); lit(x + 9, y, 0.5, FT, 0.3); shd(x + 6.5, y, 0.5, FT, 0.3); shd(x + 10.5, y, 0.5, FT, 0.3); shd(x + 11, y, 1.5, FT, 0.12); }
+    lit(x + 6, y + 2, 4, 0.5, 0.35); lit(x + 6, y + 2.5, 0.5, 11.5, 0.2); shd(x + 9.5, y + 2.5, 0.5, 11.5, 0.3); shd(x + 7.5, y + 3, 1, 0.5, 0.3);
     if (T.crops[0] === 'ice'){ b.fillStyle = '#ffffff'; b.fillRect(x + 6, y + 1, 4, 2); }
-  } else if (ch === 'R'){ b.fillStyle = '#5e5a62'; b.fillRect(x + 2, y + 4, 12, 10); b.fillStyle = '#7d7882'; b.fillRect(x + 3, y + 4, 9, 3); b.fillStyle = '#3c3947'; b.fillRect(x + 2, y + 13, 12, 1); if (T.crops[0] === 'ice'){ b.fillStyle = '#ffffff'; b.fillRect(x + 3, y + 3, 10, 2); } }
-  else if (ch === 'T'){ b.fillStyle = '#753914'; b.fillRect(x + 6, y + 9, 4, 7); b.fillStyle = T.tree[0]; b.fillRect(x + 1, y - 2, 14, 12); b.fillStyle = T.tree[1]; b.fillRect(x + 3, y, 8, 5); }
-  else if (ch === 'H'){ b.fillStyle = T.hay[0]; b.fillRect(x + 1, y + 3, 14, 12); b.fillStyle = T.hay[1]; b.fillRect(x + 2, y + 3, 12, 2); b.fillStyle = T.hay[2]; b.fillRect(x + 3, y + 8, 10, 1); }
+  } else if (ch === 'R'){ shd(x + 3, y + 13.5, 13, 2, 0.2);
+    b.fillStyle = '#5e5a62'; b.fillRect(x + 2, y + 4, 12, 10); b.fillStyle = '#7d7882'; b.fillRect(x + 3, y + 4, 9, 3); b.fillStyle = '#3c3947'; b.fillRect(x + 2, y + 13, 12, 1);
+    // a boulder, not a block: knocked-off corners, a lit crown, a crack and a mossy foot
+    b.fillStyle = gc; b.fillRect(x + 2, y + 4, 1, 1); b.fillRect(x + 13, y + 4, 1, 1.5); b.fillRect(x + 2, y + 13.5, 0.5, 0.5);
+    lit(x + 4, y + 4.5, 5, 0.5, 0.3); lit(x + 3, y + 5, 0.5, 4, 0.18); shd(x + 11, y + 7, 3, 6, 0.16); shd(x + 12.5, y + 5.5, 1.5, 8, 0.14);
+    shd(x + 7, y + 7, 0.5, 2, 0.4); shd(x + 7.5, y + 9, 0.5, 1.5, 0.4); shd(x + 8, y + 10.5, 0.5, 1, 0.4);
+    if (!snow){ b.fillStyle = 'rgba(96,170,60,0.55)'; b.fillRect(x + 3, y + 12, 3, 1); b.fillRect(x + 4, y + 11.5, 1.5, 0.5); }
+    if (T.crops[0] === 'ice'){ b.fillStyle = '#ffffff'; b.fillRect(x + 3, y + 3, 10, 2); } }
+  else if (ch === 'T'){ shd(x + 2, y + 13.5, 14, 2.5, 0.2); shd(x + 4, y + 13, 10, 3.5, 0.12);
+    b.fillStyle = '#753914'; b.fillRect(x + 6, y + 9, 4, 7); lit(x + 6, y + 9, 1, 7, 0.2); shd(x + 9, y + 9, 1, 7, 0.25);
+    // a rounded crown with clumps of leaves, lit from the top left
+    b.fillStyle = T.tree[0]; b.fillRect(x + 3, y - 3, 10, 1); b.fillRect(x + 2, y - 2, 12, 1); b.fillRect(x + 1, y - 1, 14, 10); b.fillRect(x + 2, y + 9, 12, 1); b.fillRect(x + 4, y + 10, 8, 1);
+    b.fillStyle = T.tree[1]; b.fillRect(x + 3, y, 8, 5); b.fillRect(x + 4, y - 1.5, 5, 1.5); b.fillRect(x + 2.5, y + 1, 0.5, 3);
+    lit(x + 4, y, 3, 1, 0.22); lit(x + 5, y - 1.5, 2, 0.5, 0.3); lit(x + 8.5, y + 2, 1.5, 0.5, 0.2);
+    shd(x + 1, y + 6, 14, 3, 0.14); shd(x + 2, y + 8, 12, 2, 0.14); shd(x + 11.5, y + 1, 3.5, 5, 0.1);
+    for (let i=0; i<4; i++){ const hx = (hsh >> (i*4)) & 7, hy = (hsh >> (i*3 + 11)) & 7; shd(x + 2.5 + hx*1.4, y - 0.5 + hy*1.2, 1, 0.5, 0.25); lit(x + 3 + hy*1.2, y + hx, 0.5, 0.5, 0.25); } }
+  else if (ch === 'H'){ shd(x + 2, y + 14.5, 14, 1.5, 0.2);
+    b.fillStyle = T.hay[0]; b.fillRect(x + 1, y + 3, 14, 12); b.fillStyle = T.hay[1]; b.fillRect(x + 2, y + 3, 12, 2); b.fillStyle = T.hay[2]; b.fillRect(x + 3, y + 8, 10, 1);
+    // straw ends, two bands of twine, a shaded side
+    for (let i=0; i<6; i++){ const hx = (hsh >> (i*3)) & 7; lit(x + 2 + i*2, y + 5.5 + hx*0.5, 0.5, 2, 0.3); shd(x + 3 + i*2, y + 9.5 + (hx % 5)*0.8, 0.5, 2, 0.2); }
+    shd(x + 4.5, y + 3, 0.5, 12, 0.3); shd(x + 10.5, y + 3, 0.5, 12, 0.3); shd(x + 13, y + 5, 2, 10, 0.14); shd(x + 1, y + 14, 14, 1, 0.2); lit(x + 2, y + 3, 12, 0.5, 0.3); }
 }
 // a soiled crop: a brown heap on top, stink lines and a couple of flies
 function drawSoil(k, t){
@@ -3817,11 +4035,13 @@ function drawCrop(k, t){
   const T = farmTheme();
   if (p < 0.25){ b.fillStyle = T.seed; b.fillRect(x - 3, y, 6, 3); b.fillStyle = '#edd495'; b.fillRect(x - 1, y, 2, 1); return; }
   if (p < 0.55){ b.fillStyle = T.seed; b.fillRect(x - 3, y + 2, 6, 2); b.fillStyle = T.sprout; b.fillRect(x, y - 3, 1, 5); b.fillRect(x - 2, y - 3, 2, 1); b.fillRect(x + 1, y - 4, 2, 1); return; }
+  shd(x - 5, y + 4, 11, 1.5, 0.2);
   if (k.type === 'ice'){
     // an ice cube pushing up out of the frozen bed, glinting when ready
     const s = p < 1 ? 3 : 5;
     b.fillStyle = '#75c0ec'; b.fillRect(x - s, y - s + 1, s*2, s*2); b.fillStyle = '#c3e8ff'; b.fillRect(x - s, y - s, s*2 - 1, s*2 - 1);
     b.fillStyle = '#ffffff'; b.fillRect(x - s + 1, y - s + 1, 2, 1); b.fillRect(x - s + 1, y - s + 1, 1, 2);
+    lit(x - s, y - s, s*2 - 1, 0.5, 0.6); shd(x + s - 1.5, y - s + 1, 0.5, s*2 - 2, 0.12); lit(x + 1, y + 1, 1.5, 0.5, 0.7); lit(x + 0.5, y - 1, 0.5, 2, 0.5);
   } else if (k.type === 'snow'){
     // a snowball swelling in its furrow
     const r2 = p < 1 ? 3 : 5;
@@ -3830,12 +4050,21 @@ function drawCrop(k, t){
   } else if (k.type === 'potato'){
     const s = p < 1 ? 4 : 6;
     b.fillStyle = '#2c7b20'; b.fillRect(x - s, y - s + 2, s*2, s*2 - 2); b.fillStyle = '#46b330'; b.fillRect(x - s + 1, y - s + 2, s*2 - 3, 2);
-    if (p >= 1){ b.fillStyle = '#f1eaff'; b.fillRect(x - 3, y - 4, 2, 2); b.fillRect(x + 2, y - 2, 2, 2); b.fillStyle = '#b580ed'; b.fillRect(x - 3, y - 4, 1, 1); }
+    // leaves: knocked-off corners, veins, a darker skirt
+    b.fillStyle = T.soil[0]; b.fillRect(x - s, y - s + 2, 1, 1); b.fillRect(x + s - 1, y - s + 2, 1, 1);
+    shd(x - s, y + s - 2, s*2, 2, 0.2); shd(x - 0.5, y - s + 4, 0.5, s*2 - 5, 0.25); shd(x - s + 2, y - 0.5, s*2 - 4, 0.5, 0.2);
+    lit(x - s + 1.5, y - s + 3, 1.5, 0.5, 0.35); lit(x + 1, y - s + 3, 2, 0.5, 0.25); lit(x - s + 1, y + 1, 1, 0.5, 0.25); lit(x + s - 3, y + 1.5, 1.5, 0.5, 0.25);
+    if (p >= 1){ b.fillStyle = '#f1eaff'; b.fillRect(x - 3, y - 4, 2, 2); b.fillRect(x + 2, y - 2, 2, 2); b.fillStyle = '#b580ed'; b.fillRect(x - 3, y - 4, 1, 1); b.fillStyle = '#ffd65a'; b.fillRect(x - 2.5, y - 3.5, 0.5, 0.5); b.fillRect(x + 2.5, y - 1.5, 0.5, 0.5); }
   } else {
     const s = p < 1 ? 4 : 6;
     b.fillStyle = '#388f2c'; b.fillRect(x - s - 1, y - 2, 2, 5); b.fillRect(x + s - 1, y - 2, 2, 5);
     b.fillStyle = p < 1 ? '#82d158' : '#ade97d'; b.fillRect(x - s + 1, y - s + 2, s*2 - 2, s*2 - 2);
     b.fillStyle = '#ccf49e'; b.fillRect(x - 1, y - s + 3, 2, s);
+    // a cabbage head: rounded, wrapped leaves, a pale heart
+    b.fillStyle = T.soil[0]; b.fillRect(x - s + 1, y - s + 2, 1, 1); b.fillRect(x + s - 2, y - s + 2, 1, 1); b.fillRect(x - s + 1, y + s - 1, 1, 1); b.fillRect(x + s - 2, y + s - 1, 1, 1);
+    shd(x - s + 1, y + s - 2, s*2 - 2, 1.5, 0.18); shd(x + s - 3, y - s + 3, 1.5, s*2 - 4, 0.12);
+    shd(x - s + 2.5, y - s + 4, 0.5, s*2 - 6, 0.22); shd(x + s - 3.5, y - s + 4, 0.5, s*2 - 6, 0.22); shd(x - s + 3, y + s - 3, s*2 - 6, 0.5, 0.22);
+    lit(x - s + 2, y - s + 2.5, s*2 - 5, 0.5, 0.35); lit(x - 0.5, y - s + 3, 0.5, s, 0.4);
   }
   if (p >= 1 && Math.floor(t*4 + k.c) % 3 === 0){ b.fillStyle = '#fff7cc'; b.fillRect(x + 5, y - 7, 1, 1); b.fillRect(x - 6, y - 4, 1, 1); }
 }
@@ -3846,12 +4075,24 @@ function drawShed(){
   b.fillStyle = '#c01618'; b.fillRect(x - 2, y, FT*2 + 4, 9); b.fillStyle = '#e7252f'; b.fillRect(x - 2, y, FT*2 + 4, 2);
   b.fillStyle = '#3c2113'; b.fillRect(x + 11, y + 17, 10, 15);
   b.fillStyle = '#f4cf49'; b.fillRect(x + 13, y + 11, 6, 3);
+  // detail pass: shadow on the grass, weathered boards, tiles on the roof, a proper door, the sign's lettering
+  shd(x + FT*2, y + 11, 2.5, FT*2 - 10, 0.2); shd(x + 2, y + FT*2, FT*2 + 0.5, 2, 0.22);
+  for (let i=0; i<FT*2; i+=4){ lit(x + i + 1, y + 9, 0.5, FT*2 - 9, 0.1); shd(x + i + 3.5, y + 9, 0.5, FT*2 - 9, 0.16); shd(x + i + 2, y + 14 + (i*7) % 13, 0.5, 1, 0.35); }
+  shd(x, y + 9, FT*2, 2.5, 0.3); shd(x, y + 11.5, FT*2, 1.5, 0.14); shd(x, y + FT*2 - 1, FT*2, 1, 0.25);
+  for (let j=0; j<3; j++){ shd(x - 2, y + 2 + j*2.5, FT*2 + 4, 0.5, 0.25); for (let i=(j % 2)*3; i<FT*2 + 4; i+=6) shd(x - 2 + i, y + j*2.5 - 0.5 + (j ? 0 : 2), 0.5, j ? 2.5 : 0.5, 0.2); }
+  lit(x - 2, y, FT*2 + 4, 0.5, 0.35); shd(x - 2, y + 8, FT*2 + 4, 1, 0.3);
+  lit(x + 10.5, y + 16.5, 11, 0.5, 0.25); lit(x + 10.5, y + 17, 0.5, 15, 0.2); lit(x + 20.5, y + 17, 0.5, 15, 0.2);
+  lit(x + 14, y + 17, 0.5, 15, 0.08); lit(x + 17.5, y + 17, 0.5, 15, 0.08); shd(x + 11, y + 17, 10, 2, 0.3);
+  b.fillStyle = '#f4cf49'; b.fillRect(x + 18.5, y + 25, 1, 1); lit(x + 18.5, y + 25, 0.5, 0.5, 0.6);
+  bevel(x + 13, y + 11, 6, 3, 0.35); b.fillStyle = '#7a4a12'; b.fillRect(x + 14, y + 12, 1.5, 0.5); b.fillRect(x + 16, y + 12, 2, 0.5); b.fillRect(x + 14, y + 13, 3, 0.5);
 }
-function shadow(x, y, w){ b.fillStyle = 'rgba(0,0,0,0.25)'; b.fillRect(Math.round(x - w/2), Math.round(y + 5), w, 2); }
+function shadow(x, y, w){ const x0 = Math.round(x - w/2), y0 = Math.round(y + 5); shd(x0 + 1, y0 - 0.5, w - 2, 3, 0.13); shd(x0, y0, w, 2, 0.15); }
 function renderFarm(t){
-  b.fillStyle = farmTheme().bg; b.fillRect(0, 0, W, H);
-  for (let r=0; r<FROWS; r++) for (let c=0; c<FCOLS; c++) if (ftile(c, r) !== 'S') drawFarmTile(c, r, t);
-  drawShed();
+  cached('farm' + farmTheme().name, () => {
+    b.fillStyle = farmTheme().bg; b.fillRect(0, 0, W, H);
+    for (let r=0; r<FROWS; r++) for (let c=0; c<FCOLS; c++) if (ftile(c, r) !== 'S') drawFarmTile(c, r, t);
+    drawShed();
+  });
   for (const k of F.crops){ drawCrop(k, t); if (k.soiled) drawSoil(k, t); }
   for (const l of F.loose){ b.fillStyle = CROPS[l.type].col; b.fillRect(Math.round(l.x) - 3, Math.round(l.y) - 1, 6, 5); b.fillStyle = '#000'; b.fillRect(Math.round(l.x) - 3, Math.round(l.y) + 4, 6, 1); }
   for (const co of F.coins){ if (co.life < 3 && Math.floor(t*8) % 2) continue; const sh = Math.abs(Math.sin(t*5 + co.x)), w = Math.max(1, Math.round(5*sh));
@@ -3891,6 +4132,7 @@ function drawFarmPlayer(t){
   const pal = (P.sweat > 0 || P.dignity < 35) ? WPAL_HOT : WPAL;
   const fr = P.brandT > 0 ? WREN_NOARM1 : P.walkT > 0 && Math.floor(P.walkT*8) % 2 ? WREN2 : WREN;
   spr(b, fr, pal, x - 5, y - 8, P.face < 0);
+  if (t % 3.7 < 0.11 || (t + 1.3) % 9.1 < 0.11){ b.fillStyle = wornPal(pal).s; b.fillRect(P.face < 0 ? x - 1.5 : x + 1, y - 4.5, 0.5, 1); }
   const f = P.face;
   if (P.brandT > 0){
     // the wrench waves in the direction he's threatening, his front arm out after it
@@ -4312,6 +4554,13 @@ function drawYPart(type, x, y, ghost, tight){
   else if (type === 'dist'){ disc(x, y, 7, c('#252e48', '#20293e')); if (!ghost){ disc(x, y, 3, '#c01618'); b.fillStyle = '#e7252f'; b.fillRect(x - 7, y, 3, 1); b.fillRect(x + 4, y, 3, 1); b.fillRect(x, y - 7, 1, 3); b.fillRect(x, y + 4, 1, 3); } }
   else if (type === 'plug'){ for (let i=0; i<4; i++){ b.fillStyle = c('#f9edd0', '#20293e'); b.fillRect(x - 10 + i*6, y - 4, 4, 8); if (!ghost){ b.fillStyle = '#8a94a8'; b.fillRect(x - 10 + i*6, y - 4, 4, 2); } } }
   if (ghost){ b.fillStyle = '#475267'; b.fillRect(x - p.hw, y - p.hh - 1, p.hw*2, 1); b.fillRect(x - p.hw, y + p.hh, p.hw*2, 1); b.fillRect(x - p.hw - 1, y - p.hh, 1, p.hh*2); b.fillRect(x + p.hw, y - p.hh, 1, p.hh*2); }
+  if (!ghost){
+    // a highlight up top and shade below, squared for the boxes and curved for the round castings
+    if (type === 'rad' || type === 'batt'){ lit(x - p.hw, y - p.hh, p.hw*2, 0.5, 0.35); lit(x - p.hw, y - p.hh, 0.5, p.hh*2, 0.2); shd(x - p.hw, y + p.hh - 1, p.hw*2, 1, 0.3); shd(x + p.hw - 0.5, y - p.hh, 0.5, p.hh*2, 0.3); }
+    else if (type === 'plug'){ for (let i=0; i<4; i++){ lit(x - 10 + i*6, y - 4, 0.5, 8, 0.4); shd(x - 7 + i*6, y - 2, 1, 6, 0.16); shd(x - 10 + i*6, y + 1, 4, 0.5, 0.25); } }
+    else { const r_ = type === 'alt' ? 8 : type === 'dist' ? 7 : 9; lit(x - r_*0.55, y - r_ + 1, r_*0.9, 0.5, 0.35); lit(x - r_ + 1.5, y - r_*0.55, 0.5, r_*0.7, 0.25); shd(x - r_*0.5, y + r_ - 1, r_*1.1, 1, 0.3); shd(x + r_ - 1.5, y - r_*0.3, 1, r_*0.9, 0.22); lit(x - 0.5, y - 0.5, 0.5, 0.5, 0.6); }
+    shd(x - p.hw + 1, y + p.hh, p.hw*2, 1.5, 0.3);
+  }
   // bolts: gray while loose, bright once wrenched down
   if (!ghost){ b.fillStyle = tight >= 1 ? '#86ff92' : '#f4cf49'; b.fillRect(x - p.hw - 1, y - p.hh - 1, 2, 2); b.fillRect(x + p.hw - 1, y + p.hh - 1, 2, 2); }
 }
@@ -4329,6 +4578,22 @@ function drawYugoCar(t, car){
   b.fillStyle = '#384153'; b.fillRect(186, 72 + oy, 54, 46); b.fillStyle = '#46546d'; b.fillRect(188, 74 + oy, 50, 4);
   for (let i=0; i<4; i++){ b.fillStyle = '#26324a'; b.fillRect(192 + i*12, 104 + oy, 8, 8); }
   b.fillStyle = '#6c5a48'; b.fillRect(BAY.x0 + 4, 92 + oy, 54, 2); b.fillRect(240, 92 + oy, BAY.x1 - 244, 2);
+  { // detail pass: paintwork lit down one wing and shaded down the other, chrome, lenses, glass glare, a deep bay, a cast engine
+    const x0 = BAY.x0 - 14, x1 = BAY.x1 + 14, top = BAY.y0 - 20 + oy, bw = BAY.x1 - BAY.x0;
+    lit(x0, top, 2, BAY.y1 - BAY.y0 + 80, 0.16); lit(x0, top, 0.5, BAY.y1 - BAY.y0 + 80, 0.3); shd(x1 - 3, top, 3, BAY.y1 - BAY.y0 + 80, 0.16); shd(x1 - 0.5, top, 0.5, BAY.y1 - BAY.y0 + 80, 0.3);
+    lit(x0 + 5, BAY.y0 + oy, 1, BAY.y1 - BAY.y0, 0.14); shd(x1 - 7, BAY.y0 + oy, 1, BAY.y1 - BAY.y0, 0.16);            // the wings' crease
+    lit(x0, BAY.y0 - 22 + oy, x1 - x0, 0.5, 0.7); shd(x0, BAY.y0 - 19.5 + oy, x1 - x0, 0.5, 0.3);                        // bumper chrome
+    for (const lx of [BAY.x0 - 10, BAY.x1]){ lit(lx, BAY.y0 - 19 + oy, 10, 0.5, 0.6); shd(lx, BAY.y0 - 16.5 + oy, 10, 0.5, 0.3); for (let i=2; i<10; i+=2) shd(lx + i, BAY.y0 - 18.5 + oy, 0.5, 2, 0.14); }
+    for (const [tx, ty] of [[BAY.x0 - 18, BAY.y0 - 14], [BAY.x1 + 14, BAY.y0 - 14], [BAY.x0 - 18, BAY.y1 + 8], [BAY.x1 + 14, BAY.y1 + 8]]) for (let i=1; i<22; i+=3) lit(tx, ty + oy + i, 4, 0.5, 0.14);
+    const gy = BAY.y1 + 18 + oy; lit(BAY.x0 + 4, gy, bw - 8, 0.5, 0.5); shd(BAY.x0 + 4, gy + 15, bw - 8, 1, 0.2);
+    for (let i=0; i<10; i++){ lit(BAY.x0 + 20 + i, gy + 14 - i*1.4, 6, 1.5, 0.22); lit(BAY.x0 + 34 + i, gy + 14 - i*1.4, 2, 1.5, 0.22); }
+    shd(BAY.x0, BAY.y0 + oy, bw, 3, 0.35); shd(BAY.x0, BAY.y0 + 3 + oy, 2, BAY.y1 - BAY.y0 - 3, 0.3); lit(BAY.x0, BAY.y1 - 0.5 + oy, bw, 0.5, 0.2); lit(BAY.x1 - 0.5, BAY.y0 + oy, 0.5, BAY.y1 - BAY.y0, 0.14);
+    bevel(186, 72 + oy, 54, 46, 0.3); shd(188, 78 + oy, 50, 0.5, 0.3);
+    for (let i=0; i<6; i++) shd(190 + i*9, 82 + oy, 5, 0.5, 0.3), lit(190 + i*9, 82.5 + oy, 5, 0.5, 0.1), shd(190 + i*9, 86 + oy, 5, 0.5, 0.3), lit(190 + i*9, 86.5 + oy, 5, 0.5, 0.1);
+    for (let i=0; i<4; i++){ const cx = 192 + i*12, cy = 104 + oy; shd(cx, cy, 8, 1, 0.4); shd(cx, cy + 1, 1, 7, 0.3); lit(cx, cy + 7.5, 8, 0.5, 0.25); lit(cx + 3, cy + 3, 2, 2, 0.14); lit(cx + 3, cy + 3, 1, 0.5, 0.4); }
+    for (const [bx_, by_] of [[187, 73], [238.5, 73], [187, 116.5], [238.5, 116.5]]) lit(bx_, by_ + oy, 0.5, 0.5, 0.7);
+    lit(BAY.x0 + 4, 92 + oy, 54, 0.5, 0.3); lit(240, 92 + oy, BAY.x1 - 244, 0.5, 0.3); shd(BAY.x0 + 4, 94 + oy, 54, 0.5, 0.4); shd(240, 94 + oy, BAY.x1 - 244, 0.5, 0.4);
+  }
   for (const s of car.slots){ const p = YPARTS[s.type];
     if (s.state === 'empty') drawYPart(s.type, p.x, p.y + oy, true);
     else drawYPart(s.type, p.x, p.y + oy, false, s.tight); }
@@ -4457,12 +4722,25 @@ function renderYugo(t){
   b.save(); b.translate(sh, Math.round((Math.random() - 0.5)*Math.max(0, Y.shake)*8));
   b.fillStyle = '#29203d'; b.fillRect(-10, -10, W + 20, H + 20);
   // the conveyor under the car
-  b.fillStyle = '#201930'; b.fillRect(BAY.x0 - 26, 0, BAY.x1 - BAY.x0 + 52, H);
   const scroll = Y.roll > 0 ? Math.floor(t*60) % 10 : 0;
-  b.fillStyle = '#362a52'; for (let y = -10 + scroll; y < H; y += 10){ b.fillRect(BAY.x0 - 26, y, 8, 2); b.fillRect(BAY.x1 + 18, y, 8, 2); }
+  // shop floor: big slabs with lit joints, oil stains, yellow safety lines either side of the track
+  for (let x=-4; x<W; x+=24){ shd(x, 0, 1, H, 0.2); lit(x + 1, 0, 0.5, H, 0.05); }
+  for (let y=10; y<H; y+=24){ shd(0, y, W, 1, 0.2); lit(0, y + 1, W, 0.5, 0.05); }
+  shd(98, 40, 9, 5, 0.18); shd(100, 39, 5, 7, 0.14); shd(302, 120, 8, 4, 0.18); shd(108, 150, 6, 3, 0.16);
+  b.fillStyle = '#201930'; b.fillRect(BAY.x0 - 26, 0, BAY.x1 - BAY.x0 + 52, H);
+  b.fillStyle = 'rgba(244,207,73,0.55)'; b.fillRect(BAY.x0 - 30, 0, 1.5, H); b.fillRect(BAY.x1 + 28.5, 0, 1.5, H);
+  // the belt: slats that roll with the car, steel rails with a lit edge
+  for (let y = -10 + scroll; y < H; y += 5){ shd(BAY.x0 - 18, y, BAY.x1 - BAY.x0 + 36, 0.5, 0.35); lit(BAY.x0 - 18, y + 0.5, BAY.x1 - BAY.x0 + 36, 0.5, 0.05); }
+  b.fillStyle = '#362a52'; for (let y = -10 + scroll; y < H; y += 10){ b.fillRect(BAY.x0 - 26, y, 8, 2); b.fillRect(BAY.x1 + 18, y, 8, 2); lit(BAY.x0 - 26, y, 8, 0.5, 0.25); lit(BAY.x1 + 18, y, 8, 0.5, 0.25); shd(BAY.x0 - 26, y + 2, 8, 0.5, 0.4); shd(BAY.x1 + 18, y + 2, 8, 0.5, 0.4); }
+  lit(BAY.x0 - 26, 0, 0.5, H, 0.25); lit(BAY.x1 + 25.5, 0, 0.5, H, 0.25); shd(BAY.x0 - 18.5, 0, 0.5, H, 0.4); shd(BAY.x1 + 18, 0, 0.5, H, 0.4);
   // the parts tray on the bench to the left
+  shd(6, 166, 82, 2.5, 0.3); shd(86, 33, 2.5, 133, 0.3);
   b.fillStyle = '#753914'; b.fillRect(4, 30, 82, 136); b.fillStyle = '#8a4e19'; b.fillRect(6, 32, 78, 132);
-  b.fillStyle = '#663011'; for (const [x, y] of YTRAY) b.fillRect(x - 15, y - 13, 30, 26);
+  // wood grain, a lit front edge, screws in the corners
+  for (let y=34; y<164; y+=3){ const hsh = farmHash(y, 1); shd(6 + hsh % 30, y, 20 + (hsh >> 5) % 40, 0.5, 0.14); lit(6 + (hsh >> 9) % 50, y + 1.5, 10 + (hsh >> 14) % 16, 0.5, 0.08); }
+  bevel(4, 30, 82, 136, 0.3); lit(6, 32, 78, 0.5, 0.14); shd(6, 163.5, 78, 0.5, 0.25);
+  for (const [sx_, sy_] of [[7, 33], [81.5, 33], [7, 162], [81.5, 162]]){ shd(sx_, sy_, 1.5, 1.5, 0.45); lit(sx_, sy_, 1, 0.5, 0.4); }
+  b.fillStyle = '#663011'; for (const [x, y] of YTRAY){ b.fillRect(x - 15, y - 13, 30, 26); shd(x - 15, y - 13, 30, 1.5, 0.35); shd(x - 15, y - 11.5, 1, 24.5, 0.25); lit(x - 15, y + 12.5, 30, 0.5, 0.2); lit(x + 14.5, y - 13, 0.5, 26, 0.12); }
   drawYugoCar(t, Y.car);
   // the loose part the wrench will turn if you hold the button now
   if (Y.aim && Y.aim.state === 'loose' && Y.roll <= 0){ const p = YPARTS[Y.aim.type], g = 3 + (Math.floor(t*6) % 2), x0 = p.x - p.hw - g, x1 = p.x + p.hw + g, y0 = p.y - p.hh - g, y1 = p.y + p.hh + g;
@@ -5343,14 +5621,37 @@ function renderMoped(t){
   // furrowed fields scrolling past
   const off = Math.floor(m.dist) % 12;
   b.fillStyle = '#458326'; for (let y=off - 12; y<H; y+=12){ b.fillRect(0, y, R.roadX - 10, 4); b.fillRect(R.roadX + roadW + 10, y, W, 4); }
+  // each furrow gets a sunlit lip and a shaded foot; crop tufts and wild flowers slide past with the road
+  const rowId = Math.floor(m.dist/12), rX = R.roadX + roadW + 10;
+  for (let j=0, y=off - 12; y<H; y+=12, j++){
+    lit(0, y + 4, R.roadX - 10, 0.5, 0.13); lit(rX, y + 4, W - rX, 0.5, 0.13); shd(0, y + 3.5, R.roadX - 10, 0.5, 0.16); shd(rX, y + 3.5, W - rX, 0.5, 0.16);
+    const hsh = farmHash(rowId - j, 5);
+    for (let i=0; i<5; i++){ const hx = (hsh >> (i*5)) % 90, side = (hsh >> (i + 3)) & 1, gx = side ? rX + 4 + hx % (W - rX - 6) : 2 + hx % (R.roadX - 16);
+      shd(gx, y + 7, 0.5, 2, 0.2); lit(gx + 1, y + 6.5, 0.5, 2.5, 0.2); lit(gx - 1, y + 7.5, 0.5, 1.5, 0.14); }
+    if (hsh % 3 === 0){ const side = (hsh >> 9) & 1, gx = side ? rX + 6 + (hsh >> 12) % (W - rX - 12) : 4 + (hsh >> 12) % (R.roadX - 22);
+      b.fillStyle = ['#fff3d6', '#ffd65a', '#ff9ec0', '#ff6a5a'][(hsh >> 4) % 4]; b.fillRect(gx - 0.5, y + 9, 1.5, 0.5); b.fillRect(gx, y + 8.5, 0.5, 1.5); }
+  }
   // gravel shoulders
   b.fillStyle = '#a88d59'; b.fillRect(R.roadX - 8, 0, 8, H); b.fillRect(R.roadX + roadW, 0, 8, H);
   b.fillStyle = '#b49f72'; for (let y=(Math.floor(m.dist) % 6) - 6; y<H; y+=6){ b.fillRect(R.roadX - 6, y, 1, 1); b.fillRect(R.roadX + roadW + 4, y + 3, 1, 1); }
+  // loose stones on the shoulders and a ragged fringe where the grass creeps in
+  for (let j=0, y=(Math.floor(m.dist) % 6) - 6, id=Math.floor(m.dist/6); y<H; y+=6, j++){ const hsh = farmHash(id - j, 9);
+    shd(R.roadX - 7 + hsh % 6, y + 2, 1, 0.5, 0.25); lit(R.roadX + roadW + 1 + (hsh >> 4) % 6, y + 1, 1, 0.5, 0.25); shd(R.roadX + roadW + 2 + (hsh >> 8) % 5, y + 4.5, 0.5, 0.5, 0.3); lit(R.roadX - 4 + (hsh >> 11) % 3, y + 4, 0.5, 0.5, 0.3);
+    b.fillStyle = '#4d8f2b'; b.fillRect(R.roadX - 8, y, 0.5 + ((hsh >> 14) % 3)*0.5, 3); b.fillRect(R.roadX + roadW + 8 - 0.5 - ((hsh >> 17) % 3)*0.5, y + 3, 0.5 + ((hsh >> 17) % 3)*0.5, 3); }
+  shd(R.roadX - 1.5, 0, 1.5, H, 0.14); shd(R.roadX + roadW, 0, 1.5, H, 0.14);
   // asphalt, edge lines, dashed lanes
   b.fillStyle = '#39394c'; b.fillRect(R.roadX, 0, roadW, H);
   b.fillStyle = '#f3e9ca'; b.fillRect(R.roadX + 1, 0, 1, H); b.fillRect(R.roadX + roadW - 2, 0, 1, H);
   const dash = Math.floor(m.dist) % 20;
+  // worn wheel tracks in each lane, grit in the tarmac, the odd patch and crack
+  for (let l=0; l<4; l++){ const cx = R.roadX + (l + 0.5)*R.laneW; shd(cx - 8, 0, 4, H, 0.07); shd(cx + 4, 0, 4, H, 0.07); }
+  for (let j=0, y=(Math.floor(m.dist) % 8) - 8, id=Math.floor(m.dist/8); y<H; y+=8, j++){ const hsh = farmHash(id - j, 2);
+    for (let i=0; i<4; i++){ const gx = R.roadX + 3 + (hsh >> (i*6)) % (roadW - 6); lit(gx, y + i*2, 0.5, 0.5, 0.2); shd(gx + 9, y + i*2 + 1, 1, 0.5, 0.25); }
+    if (hsh % 23 === 0){ const gx = R.roadX + 5 + (hsh >> 7) % (roadW - 22); shd(gx, y, 11, 7, 0.14); lit(gx, y, 11, 0.5, 0.06); }
+    if (hsh % 17 === 3){ const gx = R.roadX + 6 + (hsh >> 6) % (roadW - 16); shd(gx, y, 0.5, 3, 0.4); shd(gx + 0.5, y + 3, 0.5, 2.5, 0.4); shd(gx, y + 5.5, 0.5, 2.5, 0.4); } }
   b.fillStyle = '#d7ccaa'; for (let l=1; l<4; l++) for (let y=dash - 20; y<H; y+=20) b.fillRect(R.roadX + l*R.laneW, y, 1, 10);
+  // turbo: the road streaks past
+  if (m.boost > 0.2) for (let i=0; i<7; i++){ const hsh = farmHash(i, Math.floor(t*24)); lit(R.roadX + 3 + hsh % (roadW - 6), (hsh >> 8) % H, 0.5, 10 + (hsh >> 16) % 14, 0.22); }
   for (const o of m.scenery) drawScenery(o, t);
   for (const g of m.segs) drawHighRoad(g, m, t);
   for (const r of m.ramps) r.side ? drawLaunchRamp(laneX(r.lane), r.y, t) : drawRamp(laneX(r.lane), r.y);
@@ -5367,12 +5668,33 @@ function renderMoped(t){
 }
 function drawScenery(o, t){
   const x = Math.round(o.x), y = Math.round(o.y);
-  if (o.kind === 'poplar'){ b.fillStyle = '#1f4a16'; b.fillRect(x - 2, y + 4, 6, 3); b.fillStyle = '#2d691e'; b.fillRect(x - 3, y - 6, 6, 12); b.fillStyle = '#3d8e28'; b.fillRect(x - 2, y - 5, 3, 9); }
-  else if (o.kind === 'house'){ b.fillStyle = '#e8d8b0'; b.fillRect(x - 10, y - 7, 20, 14); b.fillStyle = '#ca2216'; b.fillRect(x - 11, y - 8, 22, 7); b.fillStyle = '#941711'; b.fillRect(x - 11, y - 1, 22, 2); b.fillStyle = '#5a5a5a'; b.fillRect(x + 4, y - 11, 3, 4); }
-  else if (o.kind === 'hay'){ b.fillStyle = '#e5b134'; b.fillRect(x - 5, y - 5, 10, 10); b.fillStyle = '#f4d260'; b.fillRect(x - 3, y - 3, 6, 6); b.fillStyle = '#c28b16'; b.fillRect(x - 1, y - 1, 2, 2); }
-  else if (o.kind === 'cow'){ b.fillStyle = '#f9edd0'; b.fillRect(x - 6, y - 3, 12, 6); b.fillStyle = '#261414'; b.fillRect(x - 3, y - 3, 3, 3); b.fillRect(x + 2, y, 3, 3); b.fillStyle = '#f19898'; b.fillRect(x + 6, y - 2, 3, 4); }
-  else if (o.kind === 'sign'){ b.fillStyle = '#714f2d'; b.fillRect(x, y, 1, 6); b.fillStyle = '#165ad3'; b.fillRect(x - 8, y - 6, 17, 6); b.fillStyle = '#f9edd0'; b.fillRect(x - 6, y - 4, 13, 1); }
-  else { b.fillStyle = '#366e20'; b.fillRect(x - 4, y - 3, 8, 6); b.fillStyle = '#4a952b'; b.fillRect(x - 2, y - 2, 4, 3); }
+  // every piece throws a shadow down and to the right, and gets a lit side and a few half-pixel touches
+  if (o.kind === 'poplar'){ shd(x - 1, y + 5, 8, 4, 0.2); shd(x + 1, y + 6, 8, 4, 0.12);
+    b.fillStyle = '#1f4a16'; b.fillRect(x - 2, y + 4, 6, 3); b.fillStyle = '#2d691e'; b.fillRect(x - 3, y - 5, 6, 10); b.fillRect(x - 2, y - 6, 4, 12); b.fillStyle = '#3d8e28'; b.fillRect(x - 2, y - 5, 3, 9);
+    lit(x - 1.5, y - 4.5, 1, 3, 0.25); lit(x - 1, y - 5.5, 1.5, 0.5, 0.3); shd(x + 1.5, y - 3, 1.5, 7, 0.16); shd(x - 1, y + 1, 0.5, 1.5, 0.25); shd(x, y - 2, 0.5, 1, 0.25); }
+  else if (o.kind === 'house'){ shd(x - 8, y + 7, 20, 2.5, 0.22); shd(x + 10, y - 5, 2.5, 13, 0.22);
+    b.fillStyle = '#e8d8b0'; b.fillRect(x - 10, y - 7, 20, 14); b.fillStyle = '#ca2216'; b.fillRect(x - 11, y - 8, 22, 7); b.fillStyle = '#941711'; b.fillRect(x - 11, y - 1, 22, 2); b.fillStyle = '#5a5a5a'; b.fillRect(x + 4, y - 11, 3, 4);
+    // a tiled roof with a ridge, a chimney with a cap, a door and two shuttered windows
+    lit(x - 11, y - 8, 22, 0.5, 0.35); lit(x - 11, y - 5, 22, 0.5, 0.2); for (let i=0; i<22; i+=3){ shd(x - 11 + i, y - 7.5, 0.5, 2.5, 0.18); shd(x - 9.5 + i, y - 4.5, 0.5, 3, 0.18); }
+    shd(x - 10, y + 1, 20, 1, 0.2); lit(x + 4, y - 11, 3, 0.5, 0.4); shd(x + 6, y - 10.5, 1, 3.5, 0.25);
+    b.fillStyle = '#6a3a1c'; b.fillRect(x - 2, y + 2, 4, 5); lit(x - 2, y + 2, 4, 0.5, 0.2); b.fillStyle = '#f4cf49'; b.fillRect(x + 1, y + 4.5, 0.5, 0.5);
+    for (const wx of [x - 8, x + 4]){ b.fillStyle = '#3c5f96'; b.fillRect(wx, y + 2.5, 4, 3); lit(wx, y + 2.5, 1.5, 1, 0.45); b.fillStyle = '#2d8a52'; b.fillRect(wx - 1, y + 2.5, 1, 3); b.fillRect(wx + 4, y + 2.5, 1, 3); shd(wx + 2, y + 2.5, 0.5, 3, 0.3); }
+    shd(x + 8.5, y + 1, 1.5, 6, 0.1); }
+  else if (o.kind === 'hay'){ shd(x - 3, y + 5, 10, 2, 0.22); shd(x + 5, y - 3, 2, 9, 0.22);
+    b.fillStyle = '#e5b134'; b.fillRect(x - 5, y - 4, 10, 8); b.fillRect(x - 4, y - 5, 8, 10); b.fillStyle = '#f4d260'; b.fillRect(x - 3, y - 3, 6, 6); b.fillStyle = '#c28b16'; b.fillRect(x - 1, y - 1, 2, 2);
+    lit(x - 3, y - 4.5, 5, 0.5, 0.35); shd(x - 3.5, y - 3.5, 7, 0.5, 0.18); shd(x - 3.5, y + 3, 7, 0.5, 0.25); shd(x - 3.5, y - 3, 0.5, 6, 0.18); shd(x + 3, y - 3, 0.5, 6, 0.25); shd(x + 3.5, y - 2, 1.5, 6, 0.12); lit(x - 1, y - 1, 1, 0.5, 0.4); }
+  else if (o.kind === 'cow'){ shd(x - 5, y + 3, 13, 2, 0.22);
+    b.fillStyle = '#f9edd0'; b.fillRect(x - 6, y - 3, 12, 6); b.fillStyle = '#261414'; b.fillRect(x - 3, y - 3, 3, 3); b.fillRect(x + 2, y, 3, 3); b.fillStyle = '#f19898'; b.fillRect(x + 6, y - 2, 3, 4);
+    // horns, an eye, ears, a tail that flicks, a shaded flank
+    b.fillStyle = '#f9edd0'; b.fillRect(x + 5, y - 3.5, 1, 1); b.fillRect(x + 5, y + 2.5, 1, 1); b.fillStyle = '#261414'; b.fillRect(x + 6.5, y - 1.5, 0.5, 0.5); b.fillRect(x + 6.5, y + 1, 0.5, 0.5); b.fillRect(x + 8, y - 1, 0.5, 0.5); b.fillRect(x + 8, y + 0.5, 0.5, 0.5);
+    b.fillRect(x - 8, y - 0.5 + (Math.floor(t*2 + x) % 4 === 0 ? 1 : 0), 2, 0.5); b.fillRect(x - 8.5, y - 0.5 + (Math.floor(t*2 + x) % 4 === 0 ? 1.5 : -0.5), 0.5, 1);
+    lit(x - 6, y - 3, 12, 0.5, 0.5); shd(x - 6, y + 2, 12, 1, 0.16); b.fillStyle = '#ffc1c1'; b.fillRect(x + 6, y - 2, 3, 0.5); }
+  else if (o.kind === 'sign'){ shd(x + 1, y + 5, 4, 1.5, 0.22);
+    b.fillStyle = '#714f2d'; b.fillRect(x, y, 1, 6); b.fillStyle = '#165ad3'; b.fillRect(x - 8, y - 6, 17, 6); b.fillStyle = '#f9edd0'; b.fillRect(x - 6, y - 4, 13, 1);
+    b.fillStyle = '#f9edd0'; b.fillRect(x - 7.5, y - 5.5, 16, 0.5); b.fillRect(x - 7.5, y - 1, 16, 0.5); b.fillRect(x - 7.5, y - 5.5, 0.5, 5); b.fillRect(x + 8, y - 5.5, 0.5, 5); b.fillRect(x - 4, y - 2.5, 9, 0.5); lit(x, y, 0.5, 6, 0.3); }
+  else { shd(x - 3, y + 3, 9, 1.5, 0.22);
+    b.fillStyle = '#366e20'; b.fillRect(x - 4, y - 2, 8, 4); b.fillRect(x - 3, y - 3, 6, 6); b.fillStyle = '#4a952b'; b.fillRect(x - 2, y - 2, 4, 3);
+    lit(x - 2, y - 2.5, 2.5, 0.5, 0.3); lit(x - 1, y - 1, 0.5, 0.5, 0.4); shd(x + 1, y + 1, 2.5, 1.5, 0.18); shd(x - 3, y + 0.5, 0.5, 0.5, 0.3); b.fillStyle = '#e7252f'; b.fillRect(x + 1.5, y - 1, 0.5, 0.5); b.fillRect(x - 2, y + 1, 0.5, 0.5); }
 }
 function drawRamp(x, y){
   x = Math.round(x); y = Math.round(y);
@@ -5380,6 +5702,9 @@ function drawRamp(x, y){
   b.fillStyle = '#ab6018'; b.fillRect(x - 9, y - 7, 18, 15);
   b.fillStyle = '#c88337'; for (let i=0; i<4; i++) b.fillRect(x - 9, y - 6 + i*4, 18, 2);
   b.fillStyle = '#f9cd48'; b.fillRect(x - 1, y - 5, 2, 8); b.fillRect(x - 3, y - 3, 6, 1); b.fillRect(x - 2, y - 4, 4, 1);
+  for (let i=0; i<4; i++){ lit(x - 9, y - 6 + i*4, 18, 0.5, 0.25); shd(x - 9, y - 4 + i*4, 18, 0.5, 0.3); }
+  for (const nx of [-8, 7.5]) for (let i=0; i<4; i++) shd(x + nx, y - 5.5 + i*4, 0.5, 0.5, 0.5);
+  shd(x - 9, y + 9, 20, 1.5, 0.25);
 }
 // the high road: a raised strip on the right verge with its shadow on the grass, pillars, rails, a sheer near end
 // you have to jump onto, and a slope at the far end that merges into the right lane
@@ -5431,6 +5756,12 @@ function drawTractor(x, y, t){
   b.fillStyle = '#388d23'; b.fillRect(x - 5, y - 12, 10, 22); b.fillStyle = '#59bb35'; b.fillRect(x - 4, y - 11, 8, 6);
   b.fillStyle = '#f4cf49'; b.fillRect(x - 3, y + 1, 6, 6); b.fillStyle = '#5a5a5a'; b.fillRect(x + 2, y - 9, 2, 2);
   if (Math.floor(t*8) % 2){ b.fillStyle = '#6a6a6a'; b.fillRect(x + 2, y - 13 - Math.floor(t*8) % 3, 2, 2); }
+  // tyre treads that turn, a lit bonnet with louvres, the driver's cap, a shadow on the road
+  shd(x + 5, y - 10, 2.5, 21, 0.2); shd(x - 4, y + 10, 11, 1.5, 0.25);
+  const tr = Math.floor(t*10) % 2; for (let i=tr; i<10; i+=2){ lit(x - 9, y - 2 + i, 4, 0.5, 0.16); lit(x + 5, y - 2 + i, 4, 0.5, 0.16); if (i < 5){ lit(x - 7, y - 11 + i, 3, 0.5, 0.16); lit(x + 4, y - 11 + i, 3, 0.5, 0.16); } }
+  lit(x - 5, y - 12, 0.5, 22, 0.3); lit(x - 5, y - 12, 10, 0.5, 0.3); shd(x + 4.5, y - 11.5, 0.5, 21.5, 0.3);
+  for (let i=0; i<3; i++) shd(x - 3, y - 10 + i*1.5, 6, 0.5, 0.25);
+  bevel(x - 3, y + 1, 6, 6, 0.3); b.fillStyle = '#3d3a48'; b.fillRect(x - 1.5, y + 2.5, 3, 3); lit(x - 1.5, y + 2.5, 3, 0.5, 0.3);
 }
 function drawCar(x, y, t, jumped){
   // an oncoming Zastava, nose first, headlights on
@@ -5439,6 +5770,13 @@ function drawCar(x, y, t, jumped){
   b.fillStyle = '#3976ec'; b.fillRect(x - 7, y - 13, 14, 26); b.fillStyle = '#1643d3'; b.fillRect(x - 6, y - 5, 12, 10);
   b.fillStyle = '#9ad5f8'; b.fillRect(x - 5, y + 5, 10, 3); b.fillStyle = '#6dbbe9'; b.fillRect(x - 5, y - 8, 10, 2);
   b.fillStyle = Math.floor(t*10) % 2 ? '#fff4a7' : '#ffd675'; b.fillRect(x - 6, y + 11, 3, 2); b.fillRect(x + 3, y + 11, 3, 2);
+  // a shadow on the road, a lit wing and a dark one, glare on the glass, a grille, door seams, headlight beams
+  shd(x + 7, y - 11, 2.5, 25, 0.2);
+  lit(x - 7, y - 13, 0.5, 26, 0.35); lit(x - 7, y - 13, 14, 0.5, 0.3); shd(x + 6.5, y - 12.5, 0.5, 25.5, 0.3); shd(x - 7, y + 12, 14, 1, 0.25);
+  lit(x - 6, y - 5, 12, 0.5, 0.2); shd(x - 6, y + 4.5, 12, 0.5, 0.3); lit(x - 5, y - 4, 0.5, 8, 0.14);
+  lit(x - 4.5, y + 5.5, 3, 0.5, 0.6); lit(x - 4.5, y + 6, 1, 1, 0.4); lit(x + 1, y + 6.5, 2.5, 0.5, 0.3); lit(x - 4, y - 7.5, 3, 0.5, 0.4);
+  shd(x - 7, y - 1, 1, 0.5, 0.4); shd(x + 6, y - 1, 1, 0.5, 0.4); shd(x - 2, y + 11.5, 4, 1, 0.5); lit(x - 2, y + 11.5, 4, 0.5, 0.2);
+  b.fillStyle = 'rgba(255,244,167,0.12)'; b.fillRect(x - 7, y + 13, 5, 5); b.fillRect(x + 2, y + 13, 5, 5); b.fillRect(x - 8, y + 16, 7, 5); b.fillRect(x + 1, y + 16, 7, 5);
   if (jumped){ b.fillStyle = '#261414'; b.fillRect(x - 3, y - 3, 6, 6); }
 }
 function drawMoped(m, t){
@@ -5466,6 +5804,9 @@ function drawMoped(m, t){
   r(-5, -3, 10, 8, wp.c); r(-4, -2, 8, 2, wp.d);                      // shoulders, coveralls
   r(-3, -5, 6, 5, wp.h); r(-2, -6, 4, 2, upg('ushanka') ? '#e7252f' : '#474651');   // cap from above
   r(-1, 11, 2, 2, '#8d0b10');                                         // tail light
+  r(-2.5, -6.5, 0.5, 13, 'rgba(255,255,255,0.3)'); r(2, -6, 0.5, 13, 'rgba(0,0,0,0.25)');   // light down one side of the frame, shade down the other
+  r(-7, -8, 14, 0.5, 'rgba(255,255,255,0.45)'); r(-1.5, -11.5, 0.5, 5, 'rgba(255,255,255,0.2)'); r(-1.5, 7.5, 0.5, 5, 'rgba(255,255,255,0.2)');
+  r(-4.5, 3.5, 9, 1, 'rgba(0,0,0,0.2)'); r(-2.5, -4.5, 2, 0.5, 'rgba(255,255,255,0.3)'); r(-0.5, 11, 1, 0.5, 'rgba(255,160,150,0.8)');
   if (m.boost > 0.2){ const fl = 3 + Math.floor(Math.random()*4); r(-1, 13, 3, fl, '#ff924a'); r(0, 13, 1, fl - 1, '#fff4a7'); }   // turbo flame
   if (m.speed > 60 && Math.floor(t*10) % 2) r(1, 13, 2, 2, '#6a6a6a');  // exhaust puff
 }
@@ -6036,9 +6377,20 @@ function spBackdrop(t, land){
     }
   }
   b.globalAlpha = 1;
-  for (const st of SP ? SP.stars : spStars()){ b.fillStyle = st.c; if ((Math.sin(t*2 + st.tw) + 1) > 0.25) b.fillRect(Math.round(st.x), Math.round(st.y), 1, 1); }
+  // a dusting of faint far stars behind the bright ones; the brightest flare into little crosses as they twinkle
+  for (let i=0; i<90; i++){ const hsh = farmHash(i, 123); b.globalAlpha = 0.25 + 0.2*Math.sin(t*1.3 + i); b.fillStyle = i % 3 ? '#b9c6ff' : '#ffe9c0'; b.fillRect((hsh % 640)/2, ((hsh >> 10) % 330)/2, 0.5, 0.5); }
+  b.globalAlpha = 1;
+  for (const st of SP ? SP.stars : spStars()){ b.fillStyle = st.c; const tw = Math.sin(t*2 + st.tw) + 1; if (tw > 0.25) b.fillRect(Math.round(st.x), Math.round(st.y), 1, 1);
+    if (tw > 1.8 && st.tw < 2.2){ const x = Math.round(st.x), y = Math.round(st.y); b.globalAlpha = 0.6; b.fillRect(x - 1, y + 0.25, 3, 0.5); b.fillRect(x + 0.25, y - 1, 0.5, 3); b.globalAlpha = 1; } }
   // the moon
+  glow(277, 23, 13, '#d7cdaf', 0.2);
   b.fillStyle = '#d7cdaf'; b.fillRect(270, 16, 14, 14); b.fillRect(268, 18, 18, 10); b.fillStyle = '#aca484'; b.fillRect(274, 19, 3, 3); b.fillRect(279, 24, 2, 2);
+  // rounder, with a lit limb, a shaded far side, crater rims and a few small pocks
+  b.fillStyle = '#d7cdaf'; b.fillRect(269, 17, 16, 12); b.fillRect(272, 15.5, 10, 0.5); b.fillRect(272, 30, 10, 0.5); b.fillRect(267.5, 20, 0.5, 6); b.fillRect(286, 20, 0.5, 6);
+  b.fillStyle = '#aca484'; b.fillRect(274, 19, 3, 3); b.fillRect(279, 24, 2, 2); b.fillRect(271, 25, 1.5, 1.5); b.fillRect(281, 18.5, 1, 1); b.fillRect(276.5, 26.5, 1, 1);
+  shd(274, 19, 3, 0.5, 0.3); shd(274, 19.5, 0.5, 2.5, 0.3); lit(274.5, 21.5, 2.5, 0.5, 0.35); shd(279, 24, 2, 0.5, 0.3); lit(279.5, 25.5, 1.5, 0.5, 0.35);
+  lit(269, 17, 7, 0.5, 0.4); lit(268, 18, 0.5, 7, 0.4); lit(270, 16, 6, 0.5, 0.4);
+  shd(282, 18, 4, 10, 0.14); shd(284, 20, 2, 7, 0.14); shd(272, 28, 12, 2, 0.14); shd(276, 29.5, 8, 0.5, 0.2);
   // the Earth along the bottom, slowly turning
   const cx = 160, cy = 420, R = 262, off = t*3;
   for (let y=Math.ceil(cy - R); y<H; y++){
@@ -6048,7 +6400,16 @@ function spBackdrop(t, land){
       const k = Math.floor((x + off)/4) & 63, row = (y >> 2) & 3;
       if (land[(k + row*11) & 63]){ b.fillStyle = y % 7 === 0 ? '#36a230' : '#278e2e'; b.fillRect(x, y, 4, 1); }
     }
+    // weather drifting over land and sea a little faster than the ground turns
+    if (y % 2 === 0){ const o2 = off*1.6, x0 = Math.max(0, Math.round(cx - hw)), x1 = Math.min(W, cx + hw);
+      for (let k2=Math.floor((x0 + o2)/6); k2*6 - o2 < x1; k2++){ const hsh = farmHash(k2, (y >> 1) + 200); if (hsh % 7 === 0) lit(Math.max(x0, Math.round(k2*6 - o2)), y, 6, 2, 0.3 + (hsh >> 5) % 3*0.12); } }
   }
+  // the air: a bright limb, a blue haze fading up into space, the globe darkening toward the horizon
+  for (let x=0, x0=0, py=null; x<=W; x++){ const y = x < W ? Math.round(cy - Math.sqrt(Math.max(0, R*R - (x - cx)*(x - cx)))) : null;
+    if (y === py) continue;
+    if (py !== null){ const w = x - x0; shd(x0, py, w, 3, 0.2); shd(x0, py + 3, w, 3, 0.1);
+      b.fillStyle = '#81b5f8'; b.globalAlpha = 0.3; b.fillRect(x0, py - 2, w, 1); b.globalAlpha = 0.16; b.fillRect(x0, py - 3.5, w, 1.5); b.globalAlpha = 0.07; b.fillRect(x0, py - 6, w, 2.5); b.globalAlpha = 1; }
+    x0 = x; py = y; }
   b.fillStyle = '#81b5f8'; for (let x=0; x<W; x++){ const y = cy - Math.sqrt(Math.max(0, R*R - (x - cx)*(x - cx))); b.fillRect(x, Math.round(y) - 1, 1, 1); }
 }
 const SP_NEBULAE = [[70, 50, 70, 30, '#c03ab0'], [235, 95, 80, 34, '#5a3ad0'], [140, 120, 60, 22, '#1fa8a8']];
@@ -6442,21 +6803,50 @@ function qStreet(t){
   // a bright Belgrade morning: blue sky, two drifting clouds
   ['#4f9be6', '#62aaea', '#76b8ee', '#8bc6f1', '#a2d3f4', '#b9e0f6'].forEach((c, i) => { b.fillStyle = c; b.fillRect(0, i*25, W, 25); });
   b.fillStyle = '#f4f9ff';
-  for (const [cx, cy] of [[(t*3) % (W + 60) - 30, 18], [(t*2 + 190) % (W + 60) - 30, 30]]){ b.fillRect(Math.round(cx), cy, 26, 5); b.fillRect(Math.round(cx) + 5, cy - 3, 14, 3); }
+  for (const [cx, cy] of [[(t*3) % (W + 60) - 30, 18], [(t*2 + 190) % (W + 60) - 30, 30]]){ b.fillStyle = '#f4f9ff'; b.fillRect(Math.round(cx), cy, 26, 5); b.fillRect(Math.round(cx) + 5, cy - 3, 14, 3);
+    b.fillRect(Math.round(cx) + 1, cy - 0.5, 24, 0.5); b.fillRect(Math.round(cx) + 6, cy - 3.5, 12, 0.5); b.fillRect(Math.round(cx) + 9, cy - 4.5, 6, 1); b.fillStyle = 'rgba(86,130,196,0.3)'; b.fillRect(Math.round(cx) + 1, cy + 4, 24, 1); b.fillRect(Math.round(cx) + 3, cy + 5, 20, 0.5); b.fillRect(Math.round(cx) + 14, cy - 1, 5, 1); }
+  // a hazy far skyline, and pigeons crossing now and then
+  b.fillStyle = 'rgba(96,120,190,0.3)'; for (const [hx, hy, hw] of [[100, 86, 14], [196, 70, 10], [262, 60, 20], [282, 78, 30], [306, 66, 14]]) b.fillRect(hx, hy, hw, 150 - hy);
+  for (let i=0; i<3; i++){ const k = (t*0.035 + i*0.37) % 1, bx = k*(W + 40) - 20, by = 12 + i*7 + Math.sin(t*0.8 + i)*2, fl = Math.floor(t*6 + i) % 2;
+    b.fillStyle = '#3d4a78'; b.fillRect(Math.round(bx*2)/2, Math.round(by*2)/2, 1.5, 0.5); b.fillRect(Math.round(bx*2)/2 - 1, Math.round(by*2)/2 + (fl ? -0.5 : 0.5), 1, 0.5); b.fillRect(Math.round(bx*2)/2 + 1.5, Math.round(by*2)/2 + (fl ? -0.5 : 0.5), 1, 0.5); }
+  cached('queue', () => {
   // panel blocks painted in pastels, with their windows, a few lit
   [[0, 44, 104, '#e89aa6', '#c97584'], [112, 64, 86, '#8fd2b9', '#69b096'], [204, 34, 62, '#f2cf6c', '#d2ac46']].forEach(([x0, y0, w, c, d], k) => {
     b.fillStyle = c; b.fillRect(x0, y0, w, 150 - y0);
     b.fillStyle = d; b.fillRect(x0, y0, w, 2); b.fillRect(x0 + w - 2, y0, 2, 150 - y0);
     for (let y=y0 + 6, j=0; y<140; y+=10, j++){
       b.fillStyle = d; b.fillRect(x0 + 3, y + 6, w - 6, 1);   // a balcony ledge under each row
-      for (let x=x0 + 5, i=0; x<x0 + w - 6; x+=9, i++){ b.fillStyle = (i*7 + j*13 + k*5) % 6 === 0 ? '#ffe27a' : '#35406e'; b.fillRect(x, y, 5, 5); }
+      lit(x0 + 3, y + 6, w - 6, 0.5, 0.3); shd(x0 + 3, y + 7, w - 6, 1, 0.12);
+      for (let x=x0 + 5, i=0; x<x0 + w - 6; x+=9, i++){ const on = (i*7 + j*13 + k*5) % 6 === 0, hsh = farmHash(i + k*31, j);
+        b.fillStyle = on ? '#ffe27a' : '#35406e'; b.fillRect(x, y, 5, 5);
+        // a frame and a mullion, sky on the dark panes, curtains or a lamp in the lit ones, pot plants and washing here and there
+        shd(x, y, 5, 0.5, 0.3); shd(x + 2.5, y, 0.5, 5, on ? 0.2 : 0.35); lit(x - 0.5, y - 0.5, 6, 0.5, 0.2);
+        if (on){ b.fillStyle = 'rgba(214,120,60,0.55)'; b.fillRect(x, y + 0.5, 1, 4.5); b.fillRect(x + 4, y + 0.5, 1, 4.5); lit(x + 1.5, y + 1, 1, 1, 0.5); }
+        else { lit(x + 0.5, y + 0.5, 1.5, 0.5, 0.35); lit(x + 0.5, y + 1, 0.5, 1, 0.25); lit(x + 3, y + 3, 1.5, 0.5, 0.12); }
+        if (hsh % 17 === 0){ b.fillStyle = '#b0542a'; b.fillRect(x + 1, y + 5, 1.5, 1); b.fillStyle = '#3c9a3a'; b.fillRect(x + 0.5, y + 4, 2.5, 1); b.fillStyle = '#ff5a6e'; b.fillRect(x + 1.5, y + 3.5, 0.5, 0.5); }
+        else if (hsh % 23 === 0 && x + 9 < x0 + w - 6){ shd(x + 5, y + 5, 4, 0.5, 0.35); b.fillStyle = ['#f4f9ff', '#ff8a7a', '#7ab6ff'][hsh % 3]; b.fillRect(x + 5.5, y + 5.5, 1.5, 2); b.fillStyle = '#f4f9ff'; b.fillRect(x + 7.5, y + 5.5, 1, 1.5); } }
     }
+    // concrete panels: seams, a sunlit left edge, a shaded right flank, clutter on the roof
+    for (let x=x0 + 0.5; x<x0 + w - 4; x+=18) shd(x, y0 + 2, 0.5, 148 - y0, 0.1);
+    lit(x0, y0, 1, 150 - y0, 0.25); lit(x0, y0, w, 0.5, 0.35); shd(x0 + w - 2, y0, 2, 150 - y0, 0.12);
+    b.fillStyle = d; b.fillRect(x0 + 8 + k*9, y0 - 4, 6, 4); lit(x0 + 8 + k*9, y0 - 4, 6, 0.5, 0.4); shd(x0 + 12.5 + k*9, y0 - 3.5, 1.5, 3.5, 0.2);
+    b.fillStyle = '#3d4a78'; b.fillRect(x0 + w - 16 - k*7, y0 - 9, 0.5, 9); b.fillRect(x0 + w - 18 - k*7, y0 - 8, 4.5, 0.5); b.fillRect(x0 + w - 17.5 - k*7, y0 - 6.5, 3.5, 0.5); b.fillRect(x0 + w - 30, y0 - 5, 0.5, 5); b.fillRect(x0 + w - 31.5, y0 - 4.5, 3.5, 0.5);
+    shd(x0, 146, w, 4, 0.1);
   });
   // a slogan banner on the middle block
   b.fillStyle = '#e7252f'; b.fillRect(118, 54, 74, 7); b.fillStyle = '#f9edd0'; for (let x=122; x<188; x+=5) b.fillRect(x, 57, 3, 1);
+  lit(118, 54, 74, 0.5, 0.35); shd(118, 60.5, 74, 0.5, 0.3); shd(119, 61, 74, 1.5, 0.2); for (const fx of [136, 155, 174]) shd(fx, 54.5, 1.5, 6, 0.12);
   // the pavement
   b.fillStyle = '#7a6a8c'; b.fillRect(0, 150, W, 30); b.fillStyle = '#b3a3c4'; b.fillRect(0, 150, W, 1);
   b.fillStyle = '#665878'; for (let x=0; x<W; x+=16) b.fillRect(x, 151, 1, 29); b.fillRect(0, 165, W, 1);
+  // paving slabs: a lit lip on each, cracks, weeds in the joints, a kerb shadow under the blocks
+  for (let x=0, i=0; x<W; x+=16, i++) for (const [y, r] of [[151, 0], [166, 1]]){ const hsh = farmHash(i, r + 80);
+    lit(x + 1, y, 0.5, 14, 0.14); lit(x + 1, y + (r ? 0 : 0.5), 15, 0.5, 0.12);
+    if (hsh % 4 === 0){ const gx = x + 4 + (hsh >> 4) % 8, gy = y + 3 + (hsh >> 8) % 6; shd(gx, gy, 0.5, 2, 0.3); shd(gx + 0.5, gy + 2, 0.5, 1.5, 0.3); shd(gx + 1, gy + 3.5, 0.5, 2, 0.3); shd(gx - 0.5, gy + 1.5, 0.5, 0.5, 0.3); }
+    if (hsh % 5 === 1) shd(x + 2, y + 1, 14, 13, 0.06);
+    if (hsh % 6 === 2){ b.fillStyle = '#5e9a48'; b.fillRect(x - 0.5, y + 8 + (hsh >> 6) % 4, 0.5, 1.5); b.fillRect(x + 1, y + 9 + (hsh >> 6) % 4, 0.5, 1); } }
+  shd(0, 151, W, 2, 0.14);
+  });
 }
 function qKiosk(t, shut, loaves){
   // the dark inside, the shop lady at her window, then the kiosk front around them
@@ -6528,6 +6918,7 @@ function renderQueue(t){
   const q = Q; qStreet(t);
   const drawP = p => {
     const [rows] = qSprite(p), flip = p.face < 0, ox = p.flinch > 0 ? 1 : 0;
+    footShadow(p.x + ox, 150, 9);
     spr(b, rows, p.pal, Math.round(p.x - 5 + ox), 136, flip, 1);
     if (p.state === 'served'){ qLoaf(p.x + (flip ? -8 : 2), 143); }
   };
@@ -6538,6 +6929,7 @@ function renderQueue(t){
   // Wrencher (a shove knocks him back a step)
   const jx = q.jolt > 0 ? -Math.round(q.jolt*10) : 0, wf = q.wwalk > 0 && Math.floor(q.wwalk*7) % 2 ? WREN2 : WREN;
   const carry = q.state === 'served' && q.handed > 0, wpal = P.dignity < 30 ? WPAL_HOT : WPAL, wx = Math.round(q.wx - 5 + jx);
+  footShadow(wx + 5, 150, 9);
   spr(b, carry ? WREN_NOARMS : wf, wpal, wx, 136, false, 1);
   if (carry){
     // the loaves go up on his head, both hands steadying the pile
@@ -6866,7 +7258,10 @@ function drawDTooth(st, x, y, up, amt, wob){
   const col = {ok:'#f9f3de', plaque:'#f9f3de', rot:'#663917', wood:'#bf7c37', gold:'#f4cf49'}[st], sh = {ok:'#dfd3aa', plaque:'#dfd3aa', rot:'#42240f', wood:'#975214', gold:'#cd9c11'}[st];
   b.fillStyle = col; b.fillRect(x - 6, y - 8, 12, 16); b.fillRect(x - 5, up ? y + 8 : y - 9, 10, 1);
   b.fillStyle = sh; b.fillRect(x + 4, y - 8, 2, 16); b.fillRect(x - 6, up ? y + 7 : y - 8, 12, 1);
-  if (st === 'ok'){ b.fillStyle = '#ffffff'; b.fillRect(x - 4, y - 6, 2, 6); }
+  // enamel: a rounded crown, light down the near edge, a darker neck where it meets the gum
+  lit(x - 6, y - 8, 0.5, 16, 0.4); shd(x - 6, up ? y - 8 : y + 6, 12, 2, 0.1); shd(x + 5.5, y - 8, 0.5, 16, 0.2);
+  if (st === 'ok'){ b.fillStyle = '#ffffff'; b.fillRect(x - 4, y - 6, 2, 6); lit(x - 1.5, y - 6, 0.5, 3, 0.7);
+    if (Math.floor(G.t*2.5 + x*0.37) % 11 === 0){ b.fillStyle = '#ffffff'; b.fillRect(x + 1.5, y - 5, 0.5, 3); b.fillRect(x + 0.5, y - 4, 2.5, 0.5); } }
   if (st === 'plaque' && amt > 0){
     // a yellow-green crust growing from the gum
     const hgt = Math.max(2, Math.round(13*amt)), y0 = up ? y - 8 : y + 8 - hgt;
@@ -6886,7 +7281,15 @@ function drawPatient(p, t, ox, oy, mini){
   if (p.kind === 'babushka'){ disc(cx, cy - 6, 70, 88, p.hair); b.fillStyle = '#f9edd0'; for (let k=0; k<26; k++){ const a = k/26*Math.PI*2; b.fillRect(Math.round(cx + Math.cos(a)*62), Math.round(cy - 6 + Math.sin(a)*80), 2, 2); } }
   // ears, face
   disc(cx - 62, cy - 30, 7, 11, dark); disc(cx + 62, cy - 30, 7, 11, dark);
+  if (!mini){ shd(cx - 66, cy - 34, 3, 9, 0.2); shd(cx + 63, cy - 34, 3, 9, 0.2); lit(cx - 68, cy - 38, 1, 8, 0.14); }
+  if (!mini) disc(cx + 1.5, cy + 2, 62, 80, dMix(skin, '#3a1430', 0.3));    // a rim of shade down his off side and under the jaw
   disc(cx, cy, 62, 80, skin);
+  if (!mini){
+    // a lit brow, cheekbones, the hollows either side of his nose, stubble or blush on the jowls
+    disc(cx - 20, cy - 54, 22, 4, dMix(skin, '#ffffff', 0.12));
+    shd(cx - 13, cy - 26, 2, 12, 0.08); shd(cx + 11, cy - 26, 2.5, 12, 0.12);
+    for (const s of [-1, 1]) for (let k=0; k<14; k++){ const hsh = farmHash(k, s + 60); shd(cx + s*(58 - (hsh % 9)) - 0.5, cy + 2 + (hsh >> 5) % 50, 0.5, 1, p.kind === 'babushka' ? 0.06 : 0.22); }
+  }
   b.fillStyle = dark; b.fillRect(cx - 20, cy + 72, 40, 2);
   // hair and hat
   if (p.kind === 'worker'){ disc(cx, cy - 72, 58, 16, p.hair); b.fillStyle = dMix(p.hair, '#000000', 0.3); b.fillRect(cx - 58, cy - 66, 116, 4); b.fillRect(cx - 4, cy - 86, 8, 3); }
@@ -6897,10 +7300,15 @@ function drawPatient(p, t, ox, oy, mini){
   b.fillStyle = p.kind === 'babushka' ? '#805d47' : dMix(p.hair, '#000000', 0.2);
   for (let k=0; k<16; k++){ const dy = Math.round((k/15)*tilt); b.fillRect(cx - 38 + k, by - tilt + dy, 1, 4); b.fillRect(cx + 37 - k, by - tilt + dy, 1, 4); }
   if (out){ b.fillStyle = '#261414'; for (const ex of [cx - 30, cx + 30]){ b.fillRect(ex - 6, cy - 37, 2, 2); b.fillRect(ex - 4, cy - 35, 8, 2); b.fillRect(ex + 4, cy - 37, 2, 2); } }
-  else { for (const ex of [cx - 30, cx + 30]){ b.fillStyle = ang > 0.7 ? '#ffb6a7' : '#ffffff'; b.fillRect(ex - 7, cy - 40, 14, 8); b.fillStyle = '#261414'; const look = Math.round(clamp((D && !mini ? D.hx - ex : 0)/40, -2, 2)); b.fillRect(ex - 2 + look, cy - 39, 4, 6); } }
+  else { for (const ex of [cx - 30, cx + 30]){ b.fillStyle = ang > 0.7 ? '#ffb6a7' : '#ffffff'; b.fillRect(ex - 7, cy - 40, 14, 8); b.fillStyle = '#261414'; const look = Math.round(clamp((D && !mini ? D.hx - ex : 0)/40, -2, 2)); b.fillRect(ex - 2 + look, cy - 39, 4, 6);
+      if (!mini){ // a lid's shadow, a catchlight, a lower lid and a bag under each eye, veins when he's furious
+        shd(ex - 7, cy - 40, 14, 1.5, 0.22); lit(ex - 1.5 + look, cy - 38.5, 1.5, 1.5, 0.85); shd(ex - 7, cy - 32.5, 14, 0.5, 0.25); shd(ex - 6, cy - 30, 12, 1, 0.1);
+        b.fillStyle = dMix(skin, '#3a1430', 0.2); b.fillRect(ex - 7, cy - 41, 14, 1);
+        if (ang > 0.5){ b.fillStyle = 'rgba(220,40,40,0.6)'; b.fillRect(ex - 6.5, cy - 36, 2.5, 0.5); b.fillRect(ex + 4, cy - 37.5, 2.5, 0.5); b.fillRect(ex + 3.5, cy - 34.5, 2, 0.5); } } } }
   if (p.kind === 'bureaucrat'){ b.fillStyle = '#261414'; for (const ex of [cx - 30, cx + 30]){ b.fillRect(ex - 10, cy - 43, 20, 2); b.fillRect(ex - 10, cy - 31, 20, 2); b.fillRect(ex - 10, cy - 43, 2, 14); b.fillRect(ex + 8, cy - 43, 2, 14); } b.fillRect(cx - 20, cy - 40, 20, 2); }
   // nose
   disc(cx, cy - 18, 9, 9, dark); disc(cx - 1, cy - 20, 7, 7, skin); b.fillStyle = dark; b.fillRect(cx - 6, cy - 12, 4, 2); b.fillRect(cx + 3, cy - 12, 4, 2);
+  if (!mini){ lit(cx - 5, cy - 24, 3, 1.5, 0.3); lit(cx - 5.5, cy - 22.5, 1.5, 2, 0.2); shd(cx - 5.5, cy - 12, 3, 1, 0.3); shd(cx + 3.5, cy - 12, 3, 1, 0.3); }
   if (p.kind === 'babushka'){ b.fillStyle = '#753914'; b.fillRect(cx + 36, cy - 4, 3, 3); }
   // the mouth: wide open, unless it's snapping shut on his hand
   const snapK = p.snap ? (p.snap.t < 0.12 ? p.snap.t/0.12 : p.snap.t < 0.45 ? 1 : 1 - (p.snap.t - 0.45)/0.15) : mini ? 0.55 : 0;
@@ -6910,6 +7318,11 @@ function drawPatient(p, t, ox, oy, mini){
   b.fillStyle = '#4b060f'; b.fillRect(mx0, top, mx1 - mx0, bot - top);
   if (bot - top > 30){ disc(cx, bot - 8, 30, 8, '#ed596b'); b.fillStyle = '#df2a3f'; b.fillRect(cx, bot - 14, 1, 10); }
   b.fillStyle = '#e9556a'; b.fillRect(mx0 + 2, top, mx1 - mx0 - 4, 4); b.fillRect(mx0 + 2, bot - 4, mx1 - mx0 - 4, 4);
+  if (!mini){ // wet lips, shiny gums, a throat that goes dark toward the back, spit on the tongue
+    lit(mx0 - 1, top - 2.5, mx1 - mx0 + 2, 1, 0.3); lit(mx0 + 8, top - 2, 22, 0.5, 0.4); shd(mx0 - 3, bot + 1.5, mx1 - mx0 + 6, 1.5, 0.2); lit(mx0 + 10, bot + 0.5, 30, 0.5, 0.3); shd(mx0 - 5, top + 3, 1.5, Math.max(0, bot - top - 6), 0.14); shd(mx1 + 3.5, top + 3, 1.5, Math.max(0, bot - top - 6), 0.25);
+    lit(mx0 + 2, top + 0.5, mx1 - mx0 - 4, 0.5, 0.3); shd(mx0 + 2, top + 3, mx1 - mx0 - 4, 1, 0.2); lit(mx0 + 2, bot - 3.5, mx1 - mx0 - 4, 0.5, 0.3);
+    if (bot - top > 30){ shd(mx0 + 14, top + 22, mx1 - mx0 - 28, bot - top - 44, 0.3); shd(mx0 + 30, top + 26, mx1 - mx0 - 60, Math.max(0, bot - top - 52), 0.3);
+      lit(cx - 20, bot - 13, 12, 1, 0.25); lit(cx - 22, bot - 11.5, 3, 0.5, 0.25); lit(cx + 8, bot - 12, 6, 0.5, 0.2); } }
   // the teeth ride the jaw as it shuts
   DTEETH.forEach((q, i) => { const tq = p.teeth[i], ty = q.up ? q.y + oy + (top - my0) : q.y + oy - (my1 - bot);
     const wob = D && !mini && D.work === i && tq.st !== 'plaque' && D.tool === 'wrench' ? Math.sin(t*40)*tq.prog*2 : 0;
@@ -6946,13 +7359,30 @@ function drawDentHand(t){
 }
 function renderDent(t){
   // the clinic: green tiles, the chair, a lamp blazing down
+  cached('dent', () => {
   b.fillStyle = '#4c7966'; b.fillRect(0, 0, W, H);
   b.fillStyle = '#5b8a74'; for (let x=0; x<W; x+=16) for (let y=0; y<H; y+=16) b.fillRect(x + 1, y + 1, 14, 14);
+  // glazed tiles: a lit top-left edge, a shaded foot, a glint on some, a few chipped or stained
+  for (let x=0, c=0; x<W; x+=16, c++) for (let y=0, r=0; y<H; y+=16, r++){ const hsh = farmHash(c, r + 40);
+    lit(x + 1, y + 1, 14, 0.5, 0.22); lit(x + 1, y + 1.5, 0.5, 13.5, 0.14); shd(x + 1, y + 14.5, 14, 0.5, 0.18); shd(x + 14.5, y + 1, 0.5, 13.5, 0.12);
+    if (hsh % 3 === 0){ lit(x + 3, y + 3, 3, 0.5, 0.3); lit(x + 3, y + 3.5, 0.5, 2, 0.3); }
+    if (hsh % 11 === 0) shd(x + 1, y + 1, 14, 14, 0.08);
+    if (hsh % 13 === 0){ shd(x + 10, y + 1, 0.5, 3, 0.3); shd(x + 10.5, y + 4, 0.5, 2, 0.3); shd(x + 11, y + 6, 0.5, 2, 0.3); } }
   b.fillStyle = '#25455b'; b.fillRect(FACE_X - 80, 0, 160, H); b.fillStyle = '#295b78'; b.fillRect(FACE_X - 76, 0, 4, H); b.fillRect(FACE_X + 72, 0, 4, H);
+  // the chair: padded leather with stitched seams and buttons, piping lit down one side
+  shd(FACE_X - 82, 0, 2, H, 0.25); shd(FACE_X + 80, 0, 2.5, H, 0.3);
+  lit(FACE_X - 76, 0, 1, H, 0.25); lit(FACE_X + 72, 0, 1, H, 0.25); shd(FACE_X - 73, 0, 1, H, 0.3); shd(FACE_X + 75, 0, 1, H, 0.3);
+  for (let y=14; y<H; y+=30){ shd(FACE_X - 72, y, 144, 1, 0.22); lit(FACE_X - 72, y + 1, 144, 0.5, 0.1);
+    for (let x=FACE_X - 60; x<=FACE_X + 60; x+=30){ shd(x - 1, y - 0.5, 3, 2, 0.35); lit(x - 0.5, y - 0.5, 1, 0.5, 0.3); } }
+  });
   // tool tray on its arm
+  shd(8, 160, 79, 2.5, 0.25); shd(84, 31, 2.5, 131, 0.25);
   b.fillStyle = '#8a94a8'; b.fillRect(6, 28, 78, 132); b.fillStyle = '#d4dae6'; b.fillRect(8, 30, 74, 128); b.fillStyle = '#647496'; b.fillRect(84, 90, 10, 3);
+  bevel(6, 28, 78, 132, 0.4); lit(84, 90, 10, 0.5, 0.4); shd(84, 92.5, 10, 0.5, 0.4);
+  for (let i=0; i<12; i++) lit(12 + i*6 + (i % 3), 30, 1.5, 128, 0.14);   // brushed steel
   for (const tl of DTOOLS){ const on = D.tool === tl.id, empty = tl.id === 'gold' && D.p.gold <= 0;
     b.fillStyle = on ? '#86ff92' : '#a5afc3'; b.fillRect(DTRAY_X - 34, tl.y - 13, 68, 26); b.fillStyle = '#edf1f5'; b.fillRect(DTRAY_X - 32, tl.y - 11, 64, 22);
+    shd(DTRAY_X - 32, tl.y - 11, 64, 1.5, 0.16); shd(DTRAY_X - 32, tl.y - 9.5, 1, 20.5, 0.1); lit(DTRAY_X - 34, tl.y - 13, 68, 0.5, 0.5);
     if (!(on && G.phase === 'dent') && !empty){ if (tl.id === 'wrench'){ b.save(); b.translate(DTRAY_X - 14, tl.y + 1); b.scale(1.6, 1.6); drawWrench(0, 0, 0, 16); b.restore(); }
       else if (tl.id === 'scraper'){ b.fillStyle = '#a5afc3'; b.fillRect(DTRAY_X - 16, tl.y, 28, 2); b.fillStyle = '#3976ec'; b.fillRect(DTRAY_X + 4, tl.y - 1, 8, 4); b.fillStyle = '#647496'; b.fillRect(DTRAY_X - 18, tl.y - 2, 2, 2); }
       else { for (let k=0; k<(tl.id === 'gold' ? D.p.gold : 3); k++) drawDTooth(tl.id, DTRAY_X - 14 + k*14, tl.y, false, 0); } } }
