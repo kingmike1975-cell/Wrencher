@@ -2,7 +2,7 @@
 // and Wrencher's movement (walk, double-tap run, skid, ladders, repair, brandish) with the original numbers.
 // Bureaucrats, the dog, drinks, oil, seesaws and rats come over in the next step.
 import Phaser from 'phaser';
-import { FY, LADDERS, PIPES, MPOS, GIRDER_PALS } from '../sprites/data.js';
+import { FY, LADDERS, PIPES, MPOS, GIRDER_PALS, MACH_PAINT } from '../sprites/data.js';
 import { W, H, RUN, RUN_ACCEL, SKID_DECEL, DTAP, WALK, CLIMB, REPAIR_RATE, DRIFT, ZOOM_IN, SHIFT_LEN, PXD } from '../config.js';
 import { WrencherView } from '../wrencher/Wrencher.js';
 
@@ -14,36 +14,45 @@ function hopAt(f, x) {
 }
 
 // the static room, painted once with the same canvas calls as the original renderWorld()
+// a factory window onto a Yugoslav dusk (as drawDuskWindow() in the original, minus the twinkle)
+function duskWindow(c, wx, wy) {
+  c.fillStyle = '#2b1f52'; c.fillRect(wx, wy, 18, 24);
+  const sky = ['#3a2a7a', '#5a3394', '#8c3f9e', '#c9508f', '#f0736e', '#ffa65a'];
+  for (let i = 0; i < 22; i++) { c.fillStyle = sky[Math.min(5, Math.floor(i / 22 * 6))]; c.fillRect(wx + 1, wy + 1 + i, 16, 1); }
+  c.fillStyle = '#1e1640'; c.fillRect(wx + 1, wy + 19, 5, 4); c.fillRect(wx + 6, wy + 17, 3, 6); c.fillRect(wx + 12, wy + 20, 5, 3);
+  c.fillStyle = '#fff6c0'; c.fillRect(wx + 4, wy + 4, 1, 1);
+  c.fillStyle = '#2b1f52'; c.fillRect(wx + 8, wy, 1, 24); c.fillRect(wx, wy + 11, 18, 1);
+}
+
 function paintRoom(c, shift) {
-  c.fillStyle = '#14121b'; c.fillRect(0, 0, W, H);
-  c.fillStyle = '#1b1824';
+  const gw = GIRDER_PALS[(shift - 1) % GIRDER_PALS.length];
+  c.fillStyle = gw.wall; c.fillRect(0, 0, W, H);
+  c.fillStyle = gw.lit;
+  for (let y = 28, r = 0; y < H; y += 6, r++) for (let x = (r % 2) * 6, i = 0; x < W; x += 12, i++) if ((i * 7 + r * 13) % 11 < 2) c.fillRect(x + 1, y + 1, 11, 5);
+  c.fillStyle = gw.brick;
   for (let y = 28, r = 0; y < H; y += 6, r++) { c.fillRect(0, y, W, 1); for (let x = (r % 2) * 6; x < W; x += 12) c.fillRect(x, y, 1, 6); }
   for (let f = 0; f < 3; f++) {
     const wy = FY[f] - 40;
-    for (const wx of [146, 282]) {
-      c.fillStyle = '#262236'; c.fillRect(wx, wy, 18, 24);
-      c.fillStyle = '#1c2640'; c.fillRect(wx + 1, wy + 1, 16, 22);
-      c.fillStyle = '#262236'; c.fillRect(wx + 8, wy, 1, 24); c.fillRect(wx, wy + 11, 18, 1);
-    }
+    for (const wx of [146, 282]) duskWindow(c, wx, wy);
     const cy = f === 2 ? 28 : FY[f + 1] + 6;
     for (const lx of [30, 186, 300]) {
-      c.fillStyle = 'rgba(255,214,140,0.06)';
+      c.fillStyle = 'rgba(255,205,120,0.11)';
       c.beginPath(); c.moveTo(lx - 2, cy + 3); c.lineTo(lx + 2, cy + 3); c.lineTo(lx + 22, FY[f]); c.lineTo(lx - 22, FY[f]); c.closePath(); c.fill();
-      c.fillStyle = '#3a3530'; c.fillRect(lx - 3, cy, 6, 3);
-      c.fillStyle = '#ffe3a0'; c.fillRect(lx - 1, cy + 3, 2, 1);
+      c.fillStyle = '#503d29'; c.fillRect(lx - 3, cy, 6, 3);
+      c.fillStyle = '#ffe5a7'; c.fillRect(lx - 1, cy + 3, 2, 1);
     }
-    c.fillStyle = '#2a2433'; c.fillRect(0, FY[f] - 18, 7, 18); c.fillRect(W - 7, FY[f] - 18, 7, 18);
+    c.fillStyle = '#2f2144'; c.fillRect(0, FY[f] - 18, 7, 18); c.fillRect(W - 7, FY[f] - 18, 7, 18);
     c.fillStyle = '#09080c'; c.fillRect(0, FY[f] - 17, 6, 17); c.fillRect(W - 6, FY[f] - 17, 6, 17);
   }
-  c.fillStyle = '#6d6560'; c.fillRect(114, 28, 1, 4); c.fillRect(205, 28, 1, 4);
-  c.fillStyle = '#9e2a2b'; c.fillRect(104, 31, 112, 13);
-  c.fillStyle = '#6e1c1e'; c.fillRect(104, 43, 112, 1);
+  c.fillStyle = '#7d6a5f'; c.fillRect(114, 28, 1, 4); c.fillRect(205, 28, 1, 4);
+  c.fillStyle = '#c01618'; c.fillRect(104, 31, 112, 13);
+  c.fillStyle = '#850f12'; c.fillRect(104, 43, 112, 1);
   for (const fx of [106, 205]) {
-    c.fillStyle = '#2f55a8'; c.fillRect(fx, 33, 9, 3);
-    c.fillStyle = '#e8e2d0'; c.fillRect(fx, 36, 9, 3);
-    c.fillStyle = '#c8323a'; c.fillRect(fx, 39, 9, 3);
-    c.fillStyle = '#e8c547'; c.fillRect(fx + 3, 35, 3, 3);
-    c.fillStyle = '#c8323a'; c.fillRect(fx + 4, 36, 1, 1);
+    c.fillStyle = '#1952cd'; c.fillRect(fx, 33, 9, 3);
+    c.fillStyle = '#f3e9ca'; c.fillRect(fx, 36, 9, 3);
+    c.fillStyle = '#e7252f'; c.fillRect(fx, 39, 9, 3);
+    c.fillStyle = '#f4cf49'; c.fillRect(fx + 3, 35, 3, 3);
+    c.fillStyle = '#e7252f'; c.fillRect(fx + 4, 36, 1, 1);
   }
   const gp = GIRDER_PALS[(shift - 1) % GIRDER_PALS.length];
   const girder = (y, h) => {
@@ -55,8 +64,8 @@ function paintRoom(c, shift) {
   };
   girder(24, 4);
   for (const y of FY) girder(y, 6);
-  c.fillStyle = '#0e0c13'; c.fillRect(0, FY[0] + 6, W, H - FY[0] - 6);
-  c.fillStyle = '#3ccfd0';
+  c.fillStyle = '#110b1e'; c.fillRect(0, FY[0] + 6, W, H - FY[0] - 6);
+  c.fillStyle = '#34e8e9';
   for (const l of LADDERS) {
     const top = FY[l.b], bot = FY[l.a];
     c.fillRect(l.x - 4, top, 1, bot - top); c.fillRect(l.x + 3, top, 1, bot - top);
@@ -64,9 +73,9 @@ function paintRoom(c, shift) {
   }
   for (const p of PIPES) {
     const y = FY[p.f];
-    c.fillStyle = '#55604a'; c.fillRect(p.x - 3, y - 4, 7, 4);
-    c.fillStyle = '#7d8b6c'; c.fillRect(p.x - 3, y - 4, 7, 1);
-    c.fillStyle = '#c8323a'; c.fillRect(p.x, y - 6, 1, 2); c.fillRect(p.x - 1, y - 6, 3, 1);
+    c.fillStyle = '#5b6c49'; c.fillRect(p.x - 3, y - 4, 7, 4);
+    c.fillStyle = '#869b6d'; c.fillRect(p.x - 3, y - 4, 7, 1);
+    c.fillStyle = '#e7252f'; c.fillRect(p.x, y - 6, 1, 2); c.fillRect(p.x - 1, y - 6, 3, 1);
   }
 }
 
@@ -214,20 +223,21 @@ export class Factory extends Phaser.Scene {
     for (const m of this.machines) {
       const sh = (!m.broken && m.health < 30) ? (Math.random() < 0.5 ? 1 : 0) : 0;
       const x0 = Math.round(m.x - 9) + sh, y0 = FY[m.f] - 20, dead = m.broken;
-      g.fillStyle(0x26282e); g.fillRect(x0 + 1, y0 + 17, 3, 3); g.fillRect(x0 + 14, y0 + 17, 3, 3);
-      g.fillStyle(dead ? 0x3b3f47 : 0x5d6470); g.fillRect(x0, y0 + 5, 18, 13);
-      g.fillStyle(dead ? 0x2c2f35 : 0x474d58); g.fillRect(x0 + 2, y0 + 8, 9, 8);
-      g.fillStyle(dead ? 0x24262b : 0x3a3f48); for (let i = 0; i < 3; i++) g.fillRect(x0 + 3, y0 + 10 + i * 2, 7, 1);
+      const pt = MACH_PAINT[(m.f * 2 + Math.round(m.x / 53)) % MACH_PAINT.length], hex = c => parseInt(c.slice(1), 16);
+      g.fillStyle(0x212941); g.fillRect(x0 + 1, y0 + 17, 3, 3); g.fillRect(x0 + 14, y0 + 17, 3, 3);
+      g.fillStyle(dead ? 0x384153 : hex(pt.body)); g.fillRect(x0, y0 + 5, 18, 13);
+      g.fillStyle(dead ? 0x26324a : hex(pt.panel)); g.fillRect(x0 + 2, y0 + 8, 9, 8);
+      g.fillStyle(dead ? 0x20283d : hex(pt.slat)); for (let i = 0; i < 3; i++) g.fillRect(x0 + 3, y0 + 10 + i * 2, 7, 1);
       const stroke = dead ? 0 : Math.round(Math.sin(t * (m.health < 30 ? 22 : 9)) + 1);
-      g.fillStyle(0xc9ccd2); g.fillRect(x0 + 8, y0 + 3, 2, 2 + stroke);
-      g.fillStyle(dead ? 0x3b3f47 : 0x7a828f); g.fillRect(x0 + 3, y0 - stroke, 12, 4);
-      g.fillStyle(0x9aa2ae); g.fillRect(x0 + 3, y0 - stroke, 12, 1);
-      let lc = 0x4fd16a;
-      if (dead) lc = 0x111111; else if (m.health < 30) lc = (Math.floor(t * 6) % 2) ? 0xff3b3b : 0x6b1414; else if (m.health < 60) lc = 0xf2c641;
-      g.fillStyle(0x1b1c20); g.fillRect(x0 + 12, y0 + 8, 5, 5);
+      g.fillStyle(0xc8ceda); g.fillRect(x0 + 8, y0 + 3, 2, 2 + stroke);
+      g.fillStyle(dead ? 0x384153 : hex(pt.cap)); g.fillRect(x0 + 3, y0 - stroke, 12, 4);
+      g.fillStyle(dead ? 0x97a6be : hex(pt.hi)); g.fillRect(x0 + 3, y0 - stroke, 12, 1);
+      let lc = 0x52de6f;
+      if (dead) lc = 0x110f19; else if (m.health < 30) lc = (Math.floor(t * 6) % 2) ? 0xff4949 : 0x7d0b0b; else if (m.health < 60) lc = 0xf9cd48;
+      g.fillStyle(0x181d2f); g.fillRect(x0 + 12, y0 + 8, 5, 5);
       g.fillStyle(lc); g.fillRect(x0 + 13, y0 + 9, 3, 3);
-      g.fillStyle(0x111111); g.fillRect(x0 + 2, y0 - 6, 14, 3);
-      g.fillStyle(dead ? 0x444444 : m.health < 30 ? 0xff4b4b : m.health < 60 ? 0xf2c641 : 0x4fd16a);
+      g.fillStyle(0x110f19); g.fillRect(x0 + 2, y0 - 6, 14, 3);
+      g.fillStyle(dead ? 0x43414d : m.health < 30 ? 0xff5858 : m.health < 60 ? 0xf9cd48 : 0x52de6f);
       g.fillRect(x0 + 3, y0 - 5, Math.max(dead ? 12 : 0, Math.round(12 * m.health / 100)), 1);
     }
   }

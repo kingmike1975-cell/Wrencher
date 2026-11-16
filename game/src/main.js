@@ -18,7 +18,7 @@ if (params.has('native')) {
     parent: 'game',
     width: W * PXD,
     height: H * PXD,
-    backgroundColor: '#0e0c13',
+    backgroundColor: '#110b1e',
     pixelArt: true,
     roundPixels: true,
     audio: { noAudio: true },
