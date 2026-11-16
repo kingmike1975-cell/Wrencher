@@ -22,17 +22,17 @@ export class Hud extends Phaser.Scene {
       });
       this.stick.on('pointerup', () => { controls.stick = { x: 0, y: 0 }; });
 
-      const btn = this.add.circle(w - 70, h - 72, 38, 0xc8323a, 0.55).setStrokeStyle(3, 0xe8c547, 0.9).setInteractive();
-      this.add.text(w - 70, h - 72, 'WRENCH', { fontFamily: '"Press Start 2P", monospace', fontSize: '9px', color: '#fff3d6' }).setOrigin(0.5);
-      const down = () => { controls.buttonDown(); btn.setFillStyle(0xe0464f, 0.8); };
-      const up = () => { controls.buttonUp(); btn.setFillStyle(0xc8323a, 0.55); };
+      const btn = this.add.circle(w - 70, h - 72, 38, 0xe7252f, 0.55).setStrokeStyle(3, 0xf4cf49, 0.9).setInteractive();
+      this.add.text(w - 70, h - 72, 'WRENCH', { fontFamily: '"Press Start 2P", monospace', fontSize: '9px', color: '#fff4d9' }).setOrigin(0.5);
+      const down = () => { controls.buttonDown(); btn.setFillStyle(0xf1454f, 0.8); };
+      const up = () => { controls.buttonUp(); btn.setFillStyle(0xe7252f, 0.55); };
       btn.on('pointerdown', down); btn.on('pointerup', up); btn.on('pointerout', up);
       // all fingers up: release both, so a lost touch can never leave him running
       this.input.on('pointerup', () => { if (!this.input.manager.pointers.some(p => p.isDown)) { up(); controls.stick = { x: 0, y: 0 }; } });
     }
 
     this.clock = this.add.text(w / 2, 6, '', { fontFamily: '"Press Start 2P", monospace', fontSize: '12px', color: '#ffffff' }).setOrigin(0.5, 0);
-    this.label = this.add.text(8, 6, 'PHASER PREVIEW', { fontFamily: '"Press Start 2P", monospace', fontSize: '8px', color: '#a59eb2' });
+    this.label = this.add.text(8, 6, 'PHASER PREVIEW', { fontFamily: '"Press Start 2P", monospace', fontSize: '8px', color: '#a89bc2' });
   }
 
   update() {

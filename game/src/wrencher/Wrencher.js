@@ -50,7 +50,7 @@ export class WrencherView {
     }
   }
 
-  sleeveColour() { return this.outfit === 'tracksuit' ? '#2a4ab0' : '#5a7340'; }
+  sleeveColour() { return this.outfit === 'tracksuit' ? '#1643d3' : '#61863a'; }
 
   arm(g, sx, sy, hx, hy, colour, w = 1.5) {
     const n = Math.max(2, Math.ceil(Math.hypot(hx - sx, hy - sy) * 2));
@@ -60,10 +60,10 @@ export class WrencherView {
 
   wrench(g, x0, y0, ang, len) {
     const cx = Math.cos(ang), sy = Math.sin(ang);
-    g.fillStyle(0xa7acb6);
+    g.fillStyle(0xa5afc3);
     for (let i = 0; i < len; i++) g.fillRect(Math.round(x0 + cx * i), Math.round(y0 + sy * i), 1, 1);
     const hx = Math.round(x0 + cx * len), hy = Math.round(y0 + sy * len);
-    g.fillStyle(0xd6d9df); g.fillRect(hx - 1, hy - 1, 3, 3);
-    g.fillStyle(0x4a4f58); g.fillRect(Math.round(hx + cx), Math.round(hy + sy), 1, 1);
+    g.fillStyle(0xd4dae6); g.fillRect(hx - 1, hy - 1, 3, 3);
+    g.fillStyle(0x475267); g.fillRect(Math.round(hx + cx), Math.round(hy + sy), 1, 1);
   }
 }
